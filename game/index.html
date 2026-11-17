@@ -3,17 +3,99 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>Coral Bay Heist — Open World Crime</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1020;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #f2f4f8; }
   #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
+  #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #hud.on { display: block; }
+  .panel { position: absolute; background: rgba(8, 12, 24, 0.62); border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(2px); }
+  #stats { top: 12px; left: 12px; min-width: 210px; }
+  #stats .row { display: flex; justify-content: space-between; gap: 14px; font-size: 15px; line-height: 1.5; }
+  #healthbar { height: 10px; background: #2a2f3d; border-radius: 5px; overflow: hidden; margin-top: 4px; }
+  #healthfill { height: 100%; width: 100%; background: linear-gradient(90deg, #37d67a, #a8e063); }
+  #armorbar { height: 6px; background: #2a2f3d; border-radius: 3px; overflow: hidden; margin-top: 3px; }
+  #armorfill { height: 100%; width: 0%; background: #57b6ff; }
+  #stars { font-size: 22px; letter-spacing: 3px; color: #ffd23e; text-shadow: 0 0 8px rgba(0,0,0,0.7); }
+  #stars .off { color: rgba(255,255,255,0.28); }
+  #objective { top: 12px; left: 50%; transform: translateX(-50%); max-width: 520px; text-align: center; }
+  #objective .title { color: #ffd23e; font-weight: 700; font-size: 15px; }
+  #objective .text { font-size: 14px; margin-top: 2px; }
+  #objective .dist { font-size: 13px; color: #9fd8ff; margin-top: 2px; }
+  #minimap { position: absolute; top: 12px; right: 12px; width: 220px; height: 220px;
+    border: 2px solid rgba(255,255,255,0.35); border-radius: 10px; background: #101623; }
+  #speedo { bottom: 14px; right: 14px; text-align: right; font-size: 15px; }
+  #speedo .big { font-size: 30px; font-weight: 800; }
+  #ammo { bottom: 14px; left: 14px; font-size: 16px; }
+  #clock { position: absolute; top: 244px; right: 12px; font-size: 14px; text-align: right; }
+  #msg { bottom: 110px; left: 50%; transform: translateX(-50%); font-size: 18px; font-weight: 700;
+    color: #ffd23e; text-shadow: 0 2px 6px #000; text-align: center; white-space: nowrap; }
+  #dialog { bottom: 170px; left: 50%; transform: translateX(-50%); width: 560px; max-width: 86vw;
+    font-size: 15px; line-height: 1.55; }
+  #dialog .who { color: #ff9ecf; font-weight: 700; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+    transform: translate(-50%, -50%); display: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff;
+    box-shadow: 0 0 4px #000; }
+  #crosshair::before { left: 10px; top: 0; width: 2px; height: 22px; }
+  #crosshair::after { left: 0; top: 10px; width: 22px; height: 2px; }
+  #hint { bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 13px; color: #cdd6e4;
+    white-space: nowrap; }
+  #screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(160deg, rgba(10,16,38,0.88), rgba(64,20,60,0.82)); z-index: 5; }
+  #screen .card { width: 640px; max-width: 92vw; max-height: 92vh; overflow: auto; text-align: center;
+    background: rgba(10, 14, 30, 0.92); border: 1px solid rgba(255,210,62,0.45); border-radius: 16px;
+    padding: 26px 30px; }
+  #screen h1 { margin: 0; font-size: 44px; letter-spacing: 2px; color: #ffd23e;
+    text-shadow: 0 3px 0 #b3541e, 0 6px 18px rgba(0,0,0,0.6); }
+  #screen h2 { margin: 4px 0 14px; font-size: 15px; color: #ff9ecf; letter-spacing: 4px; font-weight: 600; }
+  #screen p { font-size: 15px; line-height: 1.6; color: #dfe6f2; text-align: left; }
+  #screen .controls { text-align: left; font-size: 14px; line-height: 1.8; color: #cdd6e4;
+    background: rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 16px; margin: 12px 0; }
+  #screen .controls b { color: #ffd23e; }
+  #screen button { pointer-events: auto; font-size: 18px; font-weight: 700; margin: 6px;
+    padding: 12px 26px; border: none; border-radius: 10px; cursor: pointer;
+    background: #ffd23e; color: #1a1200; }
+  #screen button.alt { background: #2b3550; color: #eef1f5; }
+  #screen button:hover { filter: brightness(1.12); }
+  #screen .small { font-size: 13px; color: #9aa7bd; text-align: center; }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #err { position: fixed; left: 8px; bottom: 8px; z-index: 9; color: #ff8080; font-size: 12px;
+    background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 6px; display: none; max-width: 80vw; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
+<canvas id="game" aria-label="Coral Bay Heist: open world crime game"></canvas>
+<div id="hud">
+  <div class="panel" id="stats">
+    <div class="row"><span>Health</span><span id="healthtext">100</span></div>
+    <div id="healthbar"><div id="healthfill"></div></div>
+    <div id="armorbar"><div id="armorfill"></div></div>
+    <div class="row"><span>Cash</span><span id="cash">$500</span></div>
+    <div class="row"><span>Wanted</span><span id="stars"></span></div>
+  </div>
+  <div class="panel" id="objective">
+    <div class="title" id="missiontitle">Coral Bay Heist</div>
+    <div class="text" id="missiontext">Meet Marina at the pier.</div>
+    <div class="dist" id="missiondist"></div>
+  </div>
+  <canvas id="minimap" width="220" height="220"></canvas>
+  <div class="panel" id="clock"><span id="clocktext">18:40</span><br><span id="daytext">Day 1</span></div>
+  <div class="panel" id="speedo"><span class="big" id="speed">0</span> mph<br><span id="carname">On foot</span></div>
+  <div class="panel" id="ammo">Ammo <b id="ammotext">24</b> &nbsp;|&nbsp; Armor <b id="armortext">0</b></div>
+  <div id="crosshair"></div>
+  <div id="msg"></div>
+  <div class="panel" id="dialog" style="display:none"></div>
+  <div id="hint">WASD move &middot; Shift run &middot; E enter / steal car &middot; F punch &middot; Click shoot &middot; P pause &middot; M mute</div>
+</div>
+<div id="screen"></div>
 <p id="status" role="status" aria-live="polite"></p>
+<div id="err"></div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
