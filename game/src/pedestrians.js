@@ -2,12 +2,16 @@
 // gunfire or see a car coming, plus the gang enforcers who fight back.
 import * as THREE from 'three';
 import { CITY } from './config.js';
-import { clamp, distance2D, pick, range } from './random.js';
+import { clamp, distance2D, pick, range, turnToward } from './random.js';
 
 const SHIRT_COLORS = [0xe63946, 0x2a9d8f, 0xe9c46a, 0x7b5ea7, 0xf4a261, 0x48cae4, 0xef476f, 0x90be6d];
 const SKIN_COLORS = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac];
-const NAMES = ['Rosa', 'Dee', 'Marco', 'Tessa', 'Lou', 'Priya', 'Sam', 'Nia', 'Cole', 'Ana', 'Vic', 'June'];
+const NAMES = ['Rosa', 'Dee', 'Marco', 'Tessa', 'Lou', 'Priya', 'Sam', 'Nia', 'Cole', 'Ana', 'Vic', 'June];
+const WALK_SPEED = [1.2, 2.2]; // min/max stroll speed
+const FLEE_SPEED = 5.5;
 
+// A blocky walker: legs, torso, head, two arms. Arms and legs are kept on
+// userData so the walk cycle can swing them.
 export function createPedMesh(shirt, skin, scale) {
   const g = new THREE.Group();
   const shirtMat = new THREE.MeshLambertMaterial({ color: shirt });
@@ -31,6 +35,8 @@ export function createPedMesh(shirt, skin, scale) {
   g.userData.armL = armL;
   g.userData.armR = armR;
   g.userData.legs = legs;
+  g.userData.torso = torso;
+  g.userData.head = head;
   g.scale.setScalar(scale || 1);
   return g;
 }
@@ -57,7 +63,7 @@ export function createPedestrians(scene, city, rand) {
       name: pick(rand, NAMES),
       kind: kind || 'walker',
       heading: rand() * Math.PI * 2,
-      speed: range(rand, 1.2, 2.2),
+      speed: range(rand, WALK_SPEED[0], WALK_SPEED[1]),
       walkPhase: rand() * 6,
       flee: 0,           // seconds of panicked running left
       fleeFrom: null,
@@ -68,8 +74,8 @@ export function createPedestrians(scene, city, rand) {
     };
     if (kind === 'enforcer') {
       // Dark jacket + red band: the Bay Sharks crew.
-      mesh.children[1].material = new THREE.MeshLambertMaterial({ color: 0x1f2430 });
-      mesh.children[2].material = new THREE.MeshLambertMaterial({ color: 0xd90429 });
+      ped.mesh.userData.torso.material = new THREE.MeshLambertMaterial({ color: 0x1f2430 });
+      ped.mesh.userData.head.material = new THREE.MeshLambertMaterial({ color: 0xd90429 });
     }
     peds.push(ped);
     return ped;
@@ -83,9 +89,28 @@ export function createPedestrians(scene, city, rand) {
       if (distance2D(x, z, p.x, p.z) < radius) {
         p.flee = 4 + rand() * 2;
         p.fleeFrom = { x, z };
-        p.speed = 5.5;
+        p.speed = FLEE_SPEED;
       }
     }
+  }
+
+  // Move one pedestrian a step toward (tx, tz), sliding along walls:
+  // try straight ahead, then the two sides, then back.
+  function stepToward(p, tx, tz, dt) {
+    const dx = tx - p.x;
+    const dz = tz - p.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist <= 0.15) return;
+    const want = Math.atan2(dx, dz);
+    p.heading = turnToward(p.heading, want, 3 * dt);
+    const step = Math.min(dist, p.speed * dt);
+    const dirs = [p.heading, p.heading + Math.PI / 2, p.heading - Math.PI / 2, p.heading + Math.PI];
+    for (const dir of dirs) {
+      const nx = p.x + Math.sin(dir) * step;
+      const nz = p.z + Math.cos(dir) * step;
+      if (!city.isBlocked(nx, nz, 0.5)) { p.x = nx; p.z = nz; return; }
+    }
+    p.heading += Math.PI / 2;
   }
 
   function update(dt, playerPos, playerCar) {
@@ -100,7 +125,7 @@ export function createPedestrians(scene, city, rand) {
         const len = Math.hypot(dx, dz) || 1;
         tx = p.x + (dx / len) * 10;
         tz = p.z + (dz / len) * 10;
-        if (p.flee <= 0) p.speed = range(rand, 1.2, 2.2);
+        if (p.flee <= 0) p.speed = range(rand, WALK_SPEED[0], WALK_SPEED[1]);
       } else if (p.kind === 'enforcer') {
         // Enforcers hold their ground near the player and shoot when close.
         tx = p.x;
@@ -117,24 +142,10 @@ export function createPedestrians(scene, city, rand) {
         if (d < 7 && Math.abs(playerCar.speed) > 4 && p.flee <= 0) {
           p.flee = 2.5;
           p.fleeFrom = { x: playerCar.x, z: playerCar.z };
-          p.speed = 5.5;
+          p.speed = FLEE_SPEED;
         }
       }
-      const dx = tx - p.x;
-      const dz = tz - p.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist > 0.15) {
-        const want = Math.atan2(dx, dz);
-        let diff = want - p.heading;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        p.heading += clamp(diff, -3 * dt, 3 * dt);
-        const step = Math.min(dist, p.speed * dt);
-        const nx = p.x + Math.sin(p.heading) * step;
-        const nz = p.z + Math.cos(p.heading) * step;
-        if (!city.isBlocked(nx, nz, 0.5)) { p.x = nx; p.z = nz; }
-        else p.heading += Math.PI / 2;
-      }
+      stepToward(p, tx, tz, dt);
       p.walkPhase += dt * p.speed * 2.4;
       p.mesh.position.set(p.x, 0, p.z);
       p.mesh.rotation.y = p.heading;
