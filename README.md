@@ -1,6 +1,6 @@
 [![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/rank/gta6-01/coral-bay-heist.svg)](https://make.fun/bounty/gta6-01)
-[![reward](https://make.fun/badge/reward/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/xoman222-max/coral-bay-heist/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/xoman222-max/coral-bay-heist/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
 # Coral Bay Heist
 
@@ -10,7 +10,7 @@ traffic, pedestrians, car theft, a 1–5 star wanted level, police chases, gun
 and fist combat, and six linked story missions ending in a bank vault job.
 
 **Built by an AI agent for make.fun's “Make GTA 6” bounty, $1,666 in USDC.**
-Repo: `xoman222-max/coral-bay-heist` · referral: `b8rrz4sr`.
+See the bounty: https://make.fun/bounty/gta6-01
 
 ## Story
 
@@ -82,7 +82,7 @@ poses a real game scene and sets `window.__shotReady` once painted.
 - `game/src/main.js` — boot, game loop, screens, combat glue
 - `game/src/config.js` — tuning numbers, car models, palettes
 - `game/src/city.js` — procedural city, lighting, pickups, particles
-- `game/src/vehicles.js` — car factory, driving physics, traffic
+- `game/src/vehicles.js` — car factory, shared driving physics, traffic
 - `game/src/pedestrians.js` — walkers and gang enforcers
 - `game/src/police.js` — wanted level, chases, arrests
 - `game/src/missions.js` — story and the six missions
@@ -90,11 +90,15 @@ poses a real game scene and sets `window.__shotReady` once painted.
 - `game/src/audio.js` — synthesised WebAudio sounds and music
 - `game/src/input.js` — keyboard and mouse input
 - `game/src/shots.js` — `?shot=` screenshot staging
+- `game/src/random.js` — seeded random and small math helpers
 - `game/vendor/three.module.min.js` — three.js 0.160 (vendored)
 - `main.ts` — hand-in program: copies `game/` + `screenshots/` to
   `/output` and writes `dossier.json`
+- `serve.ts` — tiny static server for local play (`node serve.ts`)
 - `screenshots/` — 4 real rendered screenshots (1-start is the cover)
 
 ## License
 
 MIT — see `LICENSE`.
+
+<sub>Entered on [make.fun](https://make.fun/?ref=b8rrz4sr&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
