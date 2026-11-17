@@ -6,7 +6,7 @@ import { clamp, distance2D, pick, range, turnToward } from './random.js';
 
 const SHIRT_COLORS = [0xe63946, 0x2a9d8f, 0xe9c46a, 0x7b5ea7, 0xf4a261, 0x48cae4, 0xef476f, 0x90be6d];
 const SKIN_COLORS = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac];
-const NAMES = ['Rosa', 'Dee', 'Marco', 'Tessa', 'Lou', 'Priya', 'Sam', 'Nia', 'Cole', 'Ana', 'Vic', 'June];
+const NAMES = ['Rosa', 'Dee', 'Marco', 'Tessa', 'Lou', 'Priya', 'Sam', 'Nia', 'Cole', 'Ana', 'Vic', 'June'];
 const WALK_SPEED = [1.2, 2.2]; // min/max stroll speed
 const FLEE_SPEED = 5.5;
 
