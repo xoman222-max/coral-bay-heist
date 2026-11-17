@@ -7,13 +7,14 @@ import { createRandom, clamp, distance2D, angleDiff } from './random.js';
 import { createInput, ACTION_ENTER, ACTION_PUNCH, ACTION_PAUSE, ACTION_CONFIRM, ACTION_MUTE } from './input.js';
 import { createAudio } from './audio.js';
 import { buildCity } from './city.js';
-import { createVehicle, createTraffic } from './vehicles.js';
+import { createVehicle, createTraffic, drivePhysics } from './vehicles.js';
 import { createPedestrians, createPedMesh } from './pedestrians.js';
 import { createPolice } from './police.js';
 import { createMissions, STORY_INTRO } from './missions.js';
 import { createHud } from './hud.js';
 import { stageShot } from './shots.js';
 
+// --- Boot: URL params, DOM, error surface ----------------------------------------
 const params = new URLSearchParams(window.location.search);
 const shotName = params.get('shot');
 const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
@@ -24,20 +25,22 @@ const canvas = document.getElementById('game');
 const screenEl = document.getElementById('screen');
 const statusEl = document.getElementById('status');
 const errEl = document.getElementById('err');
-window.addEventListener('error', (event) => {
+
+function showError(message) {
   errEl.style.display = 'block';
-  errEl.textContent = 'Error: ' + (event.message || event.error);
-});
+  errEl.textContent = 'Error: ' + message;
+}
+window.addEventListener('error', (event) => showError(event.message || event.error));
 window.addEventListener('unhandledrejection', (event) => {
-  errEl.style.display = 'block';
-  errEl.textContent = 'Error: ' + (event.reason && event.reason.message ? event.reason.message : event.reason);
+  const reason = event.reason;
+  showError(reason && reason.message ? reason.message : reason);
 });
 
 const audio = createAudio();
 const hud = createHud();
 const input = createInput(canvas);
 
-// --- Three.js setup ------------------------------------------------------------
+// --- Three.js setup -----------------------------------------------------------------
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -57,7 +60,7 @@ const peds = createPedestrians(scene, city, rand);
 const police = createPolice(scene, city, rand, audio);
 const missions = createMissions();
 
-// --- Player ----------------------------------------------------------------------
+// --- Player state ----------------------------------------------------------------------
 const playerMesh = createPedMesh(0x2ec4b6, 0xe0ac69, 1.0);
 const cap = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.12, 0.46),
   new THREE.MeshLambertMaterial({ color: 0xffd23e }));
@@ -86,12 +89,16 @@ let missionFailedReason = '';
 let frameCount = 0;
 let elapsed = 0;
 
+function announce(message) { statusEl.textContent = message; }
+
+// --- Saves (localStorage; failures are silent — the game still runs) ------------------
 function readSave() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
 }
+
 function writeSave() {
   try {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({
@@ -100,17 +107,18 @@ function writeSave() {
     }));
   } catch { /* storage may be off */ }
 }
+
 function readBest() {
   try { return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0; }
   catch { return 0; }
 }
+
 function writeBest(value) {
   try { window.localStorage.setItem(BEST_KEY, String(value)); } catch { /* ignore */ }
 }
 best = readBest();
 
-function announce(message) { statusEl.textContent = message; }
-
+// --- Mission glue -----------------------------------------------------------------------
 function spawnEnforcers(count, at) {
   for (let i = 0; i < count; i += 1) {
     const e = peds.spawnPed(at.x + (i - 1) * 4, at.z + (i % 2) * 3, 'enforcer');
@@ -136,6 +144,22 @@ function startMissionIndex(i) {
   const m = missions.current();
   applyMissionSetup(m);
   hud.setMessage(m.title, 3);
+}
+
+// The red Coral Cruiser for mission 2 is always parked by the marina: the
+// job is impossible without it, so it is (re)spawned whenever it is missing.
+function ensureMissionCruiser() {
+  const existing = traffic.cars.find((c) => c.type.name === 'Coral Cruiser' && !c.wrecked &&
+    Math.hypot(c.x - 56, c.z + 48) < 10);
+  if (existing) return;
+  const type = CAR_TYPES.find((t) => t.name === 'Coral Cruiser');
+  const v = createVehicle(type, 56, -48, Math.PI / 2, city, audio);
+  v.state.npc = true;
+  v.state.parked = true;
+  v.state.cruiseSpeed = 0;
+  v.state._drive = (dt, move, others) => drivePhysics(v.state, dt, move, others, city, audio);
+  scene.add(v.state.mesh);
+  traffic.cars.push(v.state);
 }
 
 function startNewGame(fromSave) {
@@ -164,6 +188,25 @@ function startNewGame(fromSave) {
   audio.startMusic();
   audio.startEngine();
   announce('Playing Coral Bay Heist. ' + m.objective);
+}
+
+function retryMission() {
+  police.clearAll();
+  player.health = PLAYER.maxHealth;
+  player.armor = Math.max(player.armor, 25);
+  player.ammo = Math.max(player.ammo, 24);
+  if (player.inCar) { player.inCar = null; }
+  const target = missions.current() ? missions.current().target : null;
+  player.x = target ? target.x + 12 : 0;
+  player.z = target ? target.z + 12 : 20;
+  player.heading = Math.PI;
+  enforcersLeft = 0;
+  ensureMissionCruiser();
+  applyMissionSetup(missions.current());
+  hud.show(true);
+  screen = 'play';
+  screenEl.style.display = 'none';
+  announce('Retrying: ' + missions.current().title);
 }
 
 function damagePlayer(amount, source) {
@@ -201,175 +244,7 @@ function endGame(kind, reason) {
   announce(reason);
 }
 
-// The red Coral Cruiser for mission 2 is always parked by the marina: the
-// job is impossible without it, so it is (re)spawned whenever it is missing.
-function ensureMissionCruiser() {
-  const existing = traffic.cars.find((c) => c.type.name === 'Coral Cruiser' && !c.wrecked &&
-    Math.hypot(c.x - 56, c.z + 48) < 10);
-  if (existing) return;
-  const type = CAR_TYPES.find((t) => t.name === 'Coral Cruiser');
-  const v = createVehicle(type, 56, -48, Math.PI / 2, city, audio);
-  v.state.npc = true;
-  v.state.parked = true;
-  v.state.cruiseSpeed = 0;
-  scene.add(v.state.mesh);
-  traffic.cars.push(v.state);
-}
-
-function retryMission() {
-  police.clearAll();
-  player.health = PLAYER.maxHealth;
-  player.armor = Math.max(player.armor, 25);
-  player.ammo = Math.max(player.ammo, 24);
-  if (player.inCar) { player.inCar = null; }
-  player.x = missions.current() ? missions.current().target.x + 12 : 0;
-  player.z = missions.current() ? missions.current().target.z + 12 : 20;
-  player.heading = Math.PI;
-  enforcersLeft = 0;
-  ensureMissionCruiser();
-  applyMissionSetup(missions.current());
-  hud.show(true);
-  screen = 'play';
-  screenEl.style.display = 'none';
-  announce('Retrying: ' + missions.current().title);
-}
-
-// --- Screens ---------------------------------------------------------------------
-function showTitle() {
-  screen = 'title';
-  hud.show(false);
-  const save = readSave();
-  const canContinue = save && save.missionIndex > 0;
-  screenEl.style.display = 'flex';
-  screenEl.innerHTML = '';
-  const card = document.createElement('div');
-  card.className = 'card';
-  const h1 = document.createElement('h1');
-  h1.textContent = 'CORAL BAY HEIST';
-  const h2 = document.createElement('h2');
-  h2.textContent = 'AN OPEN-WORLD CRIME STORY';
-  const story = document.createElement('p');
-  story.textContent = STORY_INTRO;
-  const controls = document.createElement('div');
-  controls.className = 'controls';
-  controls.innerHTML = '<b>WASD</b> move / drive &nbsp; <b>Mouse drag</b> camera &nbsp; <b>Shift</b> run<br>' +
-    '<b>E</b> enter or steal a car &nbsp; <b>F</b> punch &nbsp; <b>Click</b> shoot &nbsp; <b>P</b> pause &nbsp; <b>M</b> mute';
-  const btnNew = document.createElement('button');
-  btnNew.textContent = 'New Game';
-  btnNew.addEventListener('click', () => { audio.unlock(); startNewGame(false); });
-  card.appendChild(h1);
-  card.appendChild(h2);
-  card.appendChild(story);
-  card.appendChild(controls);
-  card.appendChild(btnNew);
-  if (canContinue) {
-    const btnContinue = document.createElement('button');
-    btnContinue.className = 'alt';
-    btnContinue.textContent = 'Continue — Mission ' + (save.missionIndex + 1) + ' ($' + save.cash + ')';
-    btnContinue.addEventListener('click', () => { audio.unlock(); startNewGame(true); });
-    card.appendChild(btnContinue);
-  }
-  const small = document.createElement('p');
-  small.className = 'small';
-  small.textContent = 'Best haul: $' + best.toLocaleString('en-US') +
-    '  •  An original game. No real city, person or brand appears in it.  •  Progress saves in this browser.';
-  card.appendChild(small);
-  screenEl.appendChild(card);
-}
-
-function showPause() {
-  screen = 'paused';
-  const save = readSave();
-  screenEl.style.display = 'flex';
-  screenEl.innerHTML = '';
-  const card = document.createElement('div');
-  card.className = 'card';
-  const h1 = document.createElement('h1');
-  h1.textContent = 'PAUSED';
-  h1.style.fontSize = '34px';
-  const p = document.createElement('p');
-  p.style.textAlign = 'center';
-  p.textContent = 'Mission ' + (missions.index + 1) + ' of ' + missions.total +
-    ' — ' + (missions.current() ? missions.current().title : '') +
-    '  •  Cash $' + player.cash.toLocaleString('en-US') +
-    '  •  Wanted ' + police.wanted + ' star' + (police.wanted === 1 ? '' : 's') +
-    '  •  ' + (audio.isMuted() ? 'Muted (M to unmute)' : 'Sound on (M to mute)');
-  const btnResume = document.createElement('button');
-  btnResume.textContent = 'Resume';
-  btnResume.addEventListener('click', () => { screen = 'play'; screenEl.style.display = 'none'; });
-  const btnSave = document.createElement('button');
-  btnSave.className = 'alt';
-  btnSave.textContent = 'Save & Resume';
-  btnSave.addEventListener('click', () => { writeSave(); screen = 'play'; screenEl.style.display = 'none'; hud.setMessage('Progress saved.', 2); });
-  const btnQuit = document.createElement('button');
-  btnQuit.className = 'alt';
-  btnQuit.textContent = 'Quit to Title';
-  btnQuit.addEventListener('click', () => { writeSave(); showTitle(); });
-  card.appendChild(h1);
-  card.appendChild(p);
-  card.appendChild(btnResume);
-  card.appendChild(btnSave);
-  card.appendChild(btnQuit);
-  screenEl.appendChild(card);
-  announce('Paused.');
-}
-
-function showOver(kind) {
-  screen = 'over';
-  screenEl.style.display = 'flex';
-  screenEl.innerHTML = '';
-  const card = document.createElement('div');
-  card.className = 'card';
-  const h1 = document.createElement('h1');
-  h1.textContent = kind === 'busted' ? 'BUSTED' : 'WASTED';
-  h1.style.fontSize = '40px';
-  h1.style.color = kind === 'busted' ? '#57b6ff' : '#ff5a5a';
-  const p = document.createElement('p');
-  p.style.textAlign = 'center';
-  p.textContent = overReason + ' Cash kept: $' + player.cash.toLocaleString('en-US') + '.';
-  const btnRetry = document.createElement('button');
-  btnRetry.textContent = 'Retry Mission';
-  btnRetry.addEventListener('click', () => retryMission());
-  const btnTitle = document.createElement('button');
-  btnTitle.className = 'alt';
-  btnTitle.textContent = 'Title Screen';
-  btnTitle.addEventListener('click', () => showTitle());
-  card.appendChild(h1);
-  card.appendChild(p);
-  card.appendChild(btnRetry);
-  card.appendChild(btnTitle);
-  screenEl.appendChild(card);
-}
-
-function showComplete() {
-  screen = 'complete';
-  screenEl.style.display = 'flex';
-  screenEl.innerHTML = '';
-  const card = document.createElement('div');
-  card.className = 'card';
-  const h1 = document.createElement('h1');
-  h1.textContent = 'THE VAULT IS YOURS';
-  h1.style.fontSize = '34px';
-  const p = document.createElement('p');
-  p.style.textAlign = 'center';
-  p.textContent = 'Marlo and Marina sail out of Coral Bay with the vault loot as the sun comes up. ' +
-    'Sheriff Cole is left holding an empty bank and a very full incident report. ' +
-    'Final haul: $' + player.cash.toLocaleString('en-US') + '.';
-  const btnAgain = document.createElement('button');
-  btnAgain.textContent = 'Play Again';
-  btnAgain.addEventListener('click', () => { audio.unlock(); startNewGame(false); });
-  const btnTitle = document.createElement('button');
-  btnTitle.className = 'alt';
-  btnTitle.textContent = 'Title Screen';
-  btnTitle.addEventListener('click', () => showTitle());
-  card.appendChild(h1);
-  card.appendChild(p);
-  card.appendChild(btnAgain);
-  card.appendChild(btnTitle);
-  screenEl.appendChild(card);
-}
-
-// --- Combat helpers ---------------------------------------------------------------
+// --- Combat -------------------------------------------------------------------------------
 function commitCrime(amount) {
   if (crimeCooldown > 0) return;
   crimeCooldown = 2.5;
@@ -401,20 +276,10 @@ function tryPunch() {
   }
 }
 
-function tryShoot() {
-  if (player.gunTimer > 0 || player.ammo <= 0) {
-    if (player.ammo <= 0) { audio.denied(); hud.setMessage('Out of ammo — find a yellow crate.', 2); }
-    return;
-  }
-  player.gunTimer = PLAYER.gunCooldown;
-  player.ammo -= 1;
-  audio.gunshot();
-  peds.scare(player.x, player.z, 30);
-  // Muzzle flash at the player's gun.
-  const mx = player.x + Math.sin(player.heading) * 0.9;
-  const mz = player.z + Math.cos(player.heading) * 0.9;
-  city.muzzle(mx, 1.5, mz);
-  // Aim along the camera: find the closest target near the camera ray.
+// Find the closest shootable thing near the camera ray: peds, foot officers,
+// police cars and traffic cars, each as {kind, ...}. Nothing when the ray
+// only finds empty street.
+function pickTargetAlongRay() {
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
   let bestTarget = null;
@@ -440,7 +305,24 @@ function tryShoot() {
   for (const car of traffic.cars) {
     if (!car.wrecked && !car.parked) consider(car.x, car.z, 1.0, { kind: 'car', car });
   }
-  if (!bestTarget) {
+  return { target: bestTarget, dir };
+}
+
+function tryShoot() {
+  if (player.gunTimer > 0 || player.ammo <= 0) {
+    if (player.ammo <= 0) { audio.denied(); hud.setMessage('Out of ammo — find a yellow crate.', 2); }
+    return;
+  }
+  player.gunTimer = PLAYER.gunCooldown;
+  player.ammo -= 1;
+  audio.gunshot();
+  peds.scare(player.x, player.z, 30);
+  // Muzzle flash at the player's gun.
+  const mx = player.x + Math.sin(player.heading) * 0.9;
+  const mz = player.z + Math.cos(player.heading) * 0.9;
+  city.muzzle(mx, 1.5, mz);
+  const { target, dir } = pickTargetAlongRay();
+  if (!target) {
     // Tracer into the distance; a gunshot in public still draws the police.
     const tx = camera.position.x + dir.x * 40;
     const tz = camera.position.z + dir.z * 40;
@@ -448,8 +330,8 @@ function tryShoot() {
     commitCrime(WANTED.shoot);
     return;
   }
-  if (bestTarget.kind === 'ped') {
-    const ped = bestTarget.ped;
+  if (target.kind === 'ped') {
+    const ped = target.ped;
     ped.health -= PLAYER.gunDamage;
     city.blood(ped.x, 1.2, ped.z);
     if (ped.health <= 0) {
@@ -459,17 +341,17 @@ function tryShoot() {
     } else {
       commitCrime(WANTED.shoot);
     }
-  } else if (bestTarget.kind === 'cop') {
+  } else if (target.kind === 'cop') {
     commitCrime(WANTED.killCop);
     damagePlayer(8, 'A foot officer returned fire.');
     hud.setMessage('You shot an officer! The heat is on.', 2);
-  } else if (bestTarget.kind === 'policeCar') {
-    bestTarget.car.damage += 45;
-    city.sparks(bestTarget.car.x, 1, bestTarget.car.z);
+  } else if (target.kind === 'policeCar') {
+    target.car.damage += 45;
+    city.sparks(target.car.x, 1, target.car.z);
     commitCrime(WANTED.ramPolice);
-  } else if (bestTarget.kind === 'car') {
-    bestTarget.car.damage = Math.min(100, (bestTarget.car.damage || 0) + 30);
-    city.sparks(bestTarget.car.x, 1, bestTarget.car.z);
+  } else if (target.kind === 'car') {
+    target.car.damage = Math.min(100, (target.car.damage || 0) + 30);
+    city.sparks(target.car.x, 1, target.car.z);
     commitCrime(WANTED.shoot);
   }
 }
@@ -488,9 +370,6 @@ function tryEnterCar() {
   const car = traffic.nearestCar(player.x, player.z, 4.5);
   if (!car) { hud.setMessage('No car close enough.', 1.5); return; }
   if (car.damage >= 100) { hud.setMessage('That car is wrecked.', 1.5); return; }
-  if (!car.parked && car.driver !== null && car.driver !== undefined) {
-    // Occupied: handled below by stealing from a moving car.
-  }
   const wasNpc = car.npc;
   const wasParked = car.parked;
   car.npc = false;
@@ -531,7 +410,7 @@ function updatePlayerOnFoot(dt, move) {
     mx /= len;
     mz /= len;
     const want = Math.atan2(mx, mz);
-    let diff = angleDiff(player.heading, want);
+    const diff = angleDiff(player.heading, want);
     player.heading += clamp(diff, -10 * dt, 10 * dt);
     const nx = player.x + mx * speed * dt;
     const nz = player.z + mz * speed * dt;
@@ -550,24 +429,9 @@ function updatePlayerOnFoot(dt, move) {
 function updateDriving(dt, move) {
   const car = player.inCar;
   const others = traffic.cars.filter((c) => c !== car);
-  const prevX = car.x;
-  const prevZ = car.z;
-  const prevSpeed = car.speed;
-  // Reuse the vehicle physics via a small wrapper object.
-  const veh = { state: car, update: null };
-  // Drive with the shared physics by temporarily calling the creator's logic:
-  // vehicles expose createVehicle; here we replicate the call through a module
-  // helper stored on the car at spawn time.
+  // Every traffic car carries the shared drive step on _drive.
   if (car._drive) car._drive(dt, move, others);
-  else {
-    // Fallback simple drive (should not happen: _drive is set at spawn).
-    car.speed = clamp(car.speed + move.f * 20 * dt, -12, 38);
-    car.heading += move.s * 1.6 * dt * Math.sign(car.speed || 1);
-    car.x += Math.sin(car.heading) * car.speed * dt;
-    car.z += Math.cos(car.heading) * car.speed * dt;
-    car.mesh.position.set(car.x, 0, car.z);
-    car.mesh.rotation.y = car.heading;
-  }
+  else drivePhysics(car, dt, move, others, city, audio);
   player.x = car.x;
   player.z = car.z;
   player.heading = car.heading;
@@ -671,7 +535,7 @@ function updateCamera(dt) {
     targetYaw = player.inCar.heading; // camera sits behind the car, looking its way
   }
   // Smooth the yaw toward the target (shortest way round).
-  let diff = angleDiff(camYaw, targetYaw);
+  const diff = angleDiff(camYaw, targetYaw);
   camYaw += diff * (1 - Math.exp(-6 * dt));
   const pitch = player.inCar ? camPitch * 0.45 : camPitch;
   const cx = player.x - Math.sin(camYaw) * dist * Math.cos(pitch);
@@ -683,6 +547,7 @@ function updateCamera(dt) {
   camera.lookAt(player.x, lookY, player.z);
 }
 
+// --- The fixed step -------------------------------------------------------------------
 function step(dt) {
   elapsed += dt;
   hours += dt / 90; // one game hour every 90 real seconds
@@ -780,53 +645,119 @@ function step(dt) {
   });
 }
 
-// Attach the shared drive physics to every traffic car once (created in vehicles).
+// --- Screens ------------------------------------------------------------------------------
+// Every full-screen menu is a card built the same way: a heading, paragraphs
+// and buttons. Each screen clears the overlay and fills it in.
+function makeCard() {
+  screenEl.style.display = 'flex';
+  screenEl.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'card';
+  screenEl.appendChild(card);
+  return card;
+}
+
+function cardTitle(card, text, fontSize, color) {
+  const h1 = document.createElement('h1');
+  h1.textContent = text;
+  if (fontSize) h1.style.fontSize = fontSize;
+  if (color) h1.style.color = color;
+  card.appendChild(h1);
+  return h1;
+}
+
+function cardText(card, text, centered) {
+  const p = document.createElement('p');
+  if (centered) p.style.textAlign = 'center';
+  p.textContent = text;
+  card.appendChild(p);
+  return p;
+}
+
+function cardButton(card, text, alt, onClick) {
+  const btn = document.createElement('button');
+  if (alt) btn.className = 'alt';
+  btn.textContent = text;
+  btn.addEventListener('click', onClick);
+  card.appendChild(btn);
+  return btn;
+}
+
+function showTitle() {
+  screen = 'title';
+  hud.show(false);
+  const save = readSave();
+  const canContinue = save && save.missionIndex > 0;
+  const card = makeCard();
+  cardTitle(card, 'CORAL BAY HEIST');
+  const h2 = document.createElement('h2');
+  h2.textContent = 'AN OPEN-WORLD CRIME STORY';
+  card.appendChild(h2);
+  cardText(card, STORY_INTRO);
+  const controls = document.createElement('div');
+  controls.className = 'controls';
+  controls.innerHTML = '<b>WASD</b> move / drive &nbsp; <b>Mouse drag</b> camera &nbsp; <b>Shift</b> run<br>' +
+    '<b>E</b> enter or steal a car &nbsp; <b>F</b> punch &nbsp; <b>Click</b> shoot &nbsp; <b>P</b> pause &nbsp; <b>M</b> mute';
+  card.appendChild(controls);
+  cardButton(card, 'New Game', false, () => { audio.unlock(); startNewGame(false); });
+  if (canContinue) {
+    cardButton(card, 'Continue — Mission ' + (save.missionIndex + 1) + ' ($' + save.cash + ')', true,
+      () => { audio.unlock(); startNewGame(true); });
+  }
+  const small = cardText(card, 'Best haul: $' + best.toLocaleString('en-US') +
+    '  •  An original game. No real city, person or brand appears in it.  •  Progress saves in this browser.');
+  small.className = 'small';
+  announce('Coral Bay Heist. Press New Game to start.');
+}
+
+function showPause() {
+  screen = 'paused';
+  const card = makeCard();
+  cardTitle(card, 'PAUSED', '34px');
+  cardText(card, 'Mission ' + (missions.index + 1) + ' of ' + missions.total +
+    ' — ' + (missions.current() ? missions.current().title : '') +
+    '  •  Cash $' + player.cash.toLocaleString('en-US') +
+    '  •  Wanted ' + police.wanted + ' star' + (police.wanted === 1 ? '' : 's') +
+    '  •  ' + (audio.isMuted() ? 'Muted (M to unmute)' : 'Sound on (M to mute)'), true);
+  cardButton(card, 'Resume', false, () => { screen = 'play'; screenEl.style.display = 'none'; });
+  cardButton(card, 'Save & Resume', true, () => { writeSave(); screen = 'play'; screenEl.style.display = 'none'; hud.setMessage('Progress saved.', 2); });
+  cardButton(card, 'Quit to Title', true, () => { writeSave(); showTitle(); });
+  announce('Paused.');
+}
+
+function showOver(kind) {
+  screen = 'over';
+  const card = makeCard();
+  cardTitle(card, kind === 'busted' ? 'BUSTED' : 'WASTED', '40px',
+    kind === 'busted' ? '#57b6ff' : '#ff5a5a');
+  cardText(card, overReason + ' Cash kept: $' + player.cash.toLocaleString('en-US') + '.', true);
+  cardButton(card, 'Retry Mission', false, () => retryMission());
+  cardButton(card, 'Title Screen', true, () => showTitle());
+}
+
+function showComplete() {
+  screen = 'complete';
+  const card = makeCard();
+  cardTitle(card, 'THE VAULT IS YOURS', '34px');
+  cardText(card, 'Marlo and Marina sail out of Coral Bay with the vault loot as the sun comes up. ' +
+    'Sheriff Cole is left holding an empty bank and a very full incident report. ' +
+    'Final haul: $' + player.cash.toLocaleString('en-US') + '.', true);
+  cardButton(card, 'Play Again', false, () => { audio.unlock(); startNewGame(false); });
+  cardButton(card, 'Title Screen', true, () => showTitle());
+}
+
+// Attach the shared drive physics to every traffic car once. The player's
+// car is always one of these states (or a fresh one built the same way), so
+// driving never needs a second copy of the physics.
 for (const car of traffic.cars) {
-  car._drive = (dt, move, others) => {
-    const maxSpeed = 38 * car.type.speed;
-    let throttle = move.f;
-    if (throttle > 0) car.speed += 26 * throttle * dt;
-    else if (throttle < 0) {
-      if (car.speed > 0.5) car.speed -= 42 * dt;
-      else car.speed += 26 * 0.6 * throttle * dt;
-    } else {
-      car.speed -= Math.sign(car.speed) * 9 * dt;
-      if (Math.abs(car.speed) < 0.2) car.speed = 0;
-    }
-    car.speed = clamp(car.speed, -12, maxSpeed);
-    if (car.damage > 70) car.speed = clamp(car.speed, -6, maxSpeed * 0.45);
-    car.heading += move.s * 1.9 * dt * clamp(Math.abs(car.speed) / 8, 0, 1) * (car.speed >= 0 ? 1 : -1);
-    const nx = car.x + Math.sin(car.heading) * car.speed * dt;
-    const nz = car.z + Math.cos(car.heading) * car.speed * dt;
-    let hit = false;
-    if (city.isBlocked(nx, nz, 1.6)) hit = true;
-    else {
-      for (const other of others || []) {
-        if (other === car || other.wrecked) continue;
-        if (distance2D(nx, nz, other.x, other.z) < 3.4) { hit = true; break; }
-      }
-    }
-    if (hit) {
-      if (Math.abs(car.speed) > 6) {
-        car.damage = Math.min(100, car.damage + Math.abs(car.speed) * 0.9);
-        audio.crash();
-        city.sparks(car.x + Math.sin(car.heading) * 2, 1, car.z + Math.cos(car.heading) * 2);
-      }
-      car.speed *= -0.25;
-    } else { car.x = nx; car.z = nz; }
-    car.mesh.position.set(car.x, 0, car.z);
-    car.mesh.rotation.y = car.heading;
-    for (const w of car.mesh.userData.wheels) w.rotation.x += car.speed * dt * 2;
-    if (car.damage > 45) {
-      car._smoke = (car._smoke || 0) - dt;
-      if (car._smoke <= 0) { car._smoke = 0.12; city.smoke(car.x, 1.4, car.z); }
-    }
-  };
+  car._drive = (dt, move, others) => drivePhysics(car, dt, move, others, city, audio);
 }
 
 ensureMissionCruiser();
 
 // --- Screenshot staging API ------------------------------------------------------
+// The ?shot= scenes drive the game through these calls only, so a screenshot
+// is a real game state, not a mock.
 const api = {
   startNewGame() { startNewGame(false); screen = 'play'; screenEl.style.display = 'none'; hud.show(true); },
   showTitleOverCity() {
@@ -837,10 +768,7 @@ const api = {
   placePlayerInCar(typeName, x, z, heading) {
     const type = CAR_TYPES.find((t) => t.name === typeName) || CAR_TYPES[0];
     const v = createVehicle(type, x, z, heading, city, audio);
-    v.state._drive = traffic.cars[0] ? traffic.cars[0]._drive : null;
-    // Reuse the drive closure by copying from a traffic car.
-    const donor = traffic.cars.find((c) => c._drive);
-    if (donor) v.state._drive = donor._drive;
+    v.state._drive = (dt, move, others) => drivePhysics(v.state, dt, move, others, city, audio);
     scene.add(v.state.mesh);
     traffic.cars.push(v.state);
     player.inCar = v.state;
@@ -990,7 +918,6 @@ function runGame() {
     if (guard >= 8) accumulator = 0;
     renderer.render(scene, camera);
   }
-  announce('Coral Bay Heist. Press New Game to start.');
   requestAnimationFrame(frame);
 }
 
