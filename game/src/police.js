@@ -1,209 +1,150 @@
-// Police: foot officers and black-and-white interceptors that chase the player
-// while wanted, ram the player's car, and arrest on foot after a hold.
-// Wanted stars fall again after the player stays out of sight for a while.
+// Coral Bay Heist — the wanted level and the people who enforce it.
+// Police cars chase and ram; enforcers fight on foot. The wanted
+// level only falls when the player is genuinely out of sight.
+
 import * as THREE from 'three';
-import { POLICE, WANTED } from './config.js';
-import { clamp, distance2D, range, turnToward } from './random.js';
-import { createCarMesh } from './vehicles.js';
-import { createPedMesh } from './pedestrians.js';
+import { WANTED } from './config.js';
+import { createCar, updatePoliceCar } from './vehicles.js';
 
-const POLICE_TYPE = { name: 'Interceptor', color: 0x1a1a2e, speed: 1.05, len: 4.5, wid: 2.0, kind: 'sedan' };
-const SPAWN_DIST = 32;    // how far from the player new units appear
-const SPAWN_TRIES = 10;   // attempts to find a spot that is not inside a wall
-
-export function createPolice(scene, city, rand, audio) {
-  const cops = [];        // foot officers
-  const cars = [];        // police cars
-  let wanted = 0;
-  let hiddenTimer = 0;    // seconds since any police last saw the player
-  let arrestProgress = 0;
-
-  function addWanted(amount) {
-    const before = wanted;
-    wanted = clamp(wanted + amount, 0, WANTED.max);
-    if (wanted > before) hiddenTimer = 0;
-    return wanted;
+export class Wanted {
+  constructor() {
+    this.level = 0;
+    this.hiddenTimer = 0;
   }
-
-  // Pick a spawn point near (x, z) that is not inside a building: a cop or
-  // cruiser spawned inside a wall can never reach the player.
-  function freeSpotNear(x, z, dist) {
-    for (let k = 0; k < SPAWN_TRIES; k += 1) {
-      const a = rand() * Math.PI * 2;
-      const sx = clamp(x + Math.sin(a) * dist, -110, 110);
-      const sz = clamp(z + Math.cos(a) * dist, -110, 110);
-      if (!city.isBlocked(sx, sz, 1.5)) return { x: sx, z: sz };
-    }
-    return { x: clamp(x, -110, 110), z: clamp(z, -110, 110) };
+  add(n) {
+    this.level = Math.min(WANTED.maxStars, this.level + n);
+    this.hiddenTimer = 0;
   }
-
-  function spawnCarNear(x, z) {
-    const mesh = createCarMesh(POLICE_TYPE, 0xf8f9fa);
-    // Black doors, white body: a dark stripe box over the body.
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.02, 0.3, 3.4),
-      new THREE.MeshLambertMaterial({ color: 0x11131a }));
-    stripe.position.y = 0.62;
-    mesh.add(stripe);
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.18, 0.5),
-      new THREE.MeshBasicMaterial({ color: 0xff2222 }));
-    bar.position.set(0, 1.62, 0);
-    mesh.add(bar);
-    // Spawn on open ground away from the player, facing them.
-    const spot = freeSpotNear(x, z, SPAWN_DIST);
-    const heading = Math.atan2(x - spot.x, z - spot.z);
-    mesh.position.set(spot.x, 0, spot.z);
-    mesh.rotation.y = heading;
-    scene.add(mesh);
-    const car = {
-      mesh, bar, x: spot.x, z: spot.z, heading, speed: 0,
-      damage: 0, flash: 0, siren: true, wrecked: false,
-    };
-    cars.push(car);
-    return car;
+  set(n) {
+    this.level = Math.max(0, Math.min(WANTED.maxStars, n));
+    this.hiddenTimer = 0;
   }
-
-  function spawnFootCop(x, z) {
-    const mesh = createPedMesh(0x1b2a4a, 0xe0ac69, 1.05);
-    mesh.userData.torso.material = new THREE.MeshLambertMaterial({ color: 0x14213d });
-    const spot = freeSpotNear(x, z, 30);
-    mesh.position.set(spot.x, 0, spot.z);
-    scene.add(mesh);
-    const cop = { mesh, x: spot.x, z: spot.z, heading: 0, speed: 5.2, arrest: 0 };
-    cops.push(cop);
-    return cop;
+  clear() {
+    this.level = 0;
+    this.hiddenTimer = 0;
   }
-
-  // Desired force scales with stars: 1-2 stars = 1 car, 3 = 2 cars + 1 cop,
-  // 4-5 = 3 cars + 2 cops.
-  function ensureForce(playerX, playerZ) {
-    const wantCars = wanted === 0 ? 0 : wanted <= 2 ? 1 : wanted === 3 ? 2 : 3;
-    const wantCops = wanted >= 3 ? (wanted >= 4 ? 2 : 1) : 0;
-    while (cars.filter((c) => !c.wrecked).length < wantCars) spawnCarNear(playerX, playerZ);
-    while (cops.length < wantCops) spawnFootCop(playerX, playerZ);
-  }
-
-  // Walk one step toward (tx, tz), sliding along walls: try forward, then
-  // the two sides, then back, so a wall in front sends the walker around the
-  // building instead of pinning them to it. The heading turns at most
-  // 3.5 rad/s toward the target, so a wall deflection survives into the
-  // next frame instead of being overwritten.
-  function walkToward(walker, tx, tz, step, dt) {
-    const want = Math.atan2(tx - walker.x, tz - walker.z);
-    walker.heading = turnToward(walker.heading, want, 3.5 * dt);
-    const dirs = [walker.heading, walker.heading + Math.PI / 2, walker.heading - Math.PI / 2, walker.heading + Math.PI];
-    for (const dir of dirs) {
-      const nx = walker.x + Math.sin(dir) * step;
-      const nz = walker.z + Math.cos(dir) * step;
-      if (!city.isBlocked(nx, nz, 0.5)) { walker.x = nx; walker.z = nz; return true; }
-    }
-    walker.heading += Math.PI / 2;
-    return false;
-  }
-
-  function update(dt, player, playerCar, onArrested, onRam) {
-    const px = player.x;
-    const pz = player.z;
-    ensureForce(px, pz);
-    let seen = false;
-    // Police cars chase, ram, and spin out when wrecked.
-    for (const car of cars) {
-      if (car.wrecked) continue;
-      const d = distance2D(px, pz, car.x, car.z);
-      if (d < POLICE.sightRange) seen = true;
-      car.heading = turnToward(car.heading, Math.atan2(px - car.x, pz - car.z), 1.8 * dt);
-      const targetSpeed = d > 6 ? POLICE.chaseSpeed : 16;
-      car.speed += clamp(targetSpeed - car.speed, -22 * dt, 16 * dt);
-      const nx = car.x + Math.sin(car.heading) * car.speed * dt;
-      const nz = car.z + Math.cos(car.heading) * car.speed * dt;
-      if (!city.isBlocked(nx, nz, 1.6)) { car.x = nx; car.z = nz; }
-      else { car.heading += Math.PI / 3; car.speed *= 0.5; }
-      car.mesh.position.set(car.x, 0, car.z);
-      car.mesh.rotation.y = car.heading;
-      car.flash += dt;
-      car.bar.material.color.setHex(Math.floor(car.flash * 3) % 2 === 0 ? 0xff2222 : 0x2266ff);
-      // Ram the player's car.
-      if (playerCar && d < 4.2 && Math.abs(car.speed) > 8) {
-        playerCar.damage = Math.min(100, playerCar.damage + POLICE.ramDamage);
-        car.speed *= 0.4;
-        if (onRam) onRam();
-        city.sparks(car.x, 1, car.z);
-        if (audio) audio.crash();
+  // Call every frame. nearestCop is how far the closest cop is;
+  // Infinity when no cop can see the player at all.
+  update(dt, nearestCop) {
+    if (this.level === 0) return;
+    if (nearestCop > WANTED.hideDistance) {
+      this.hiddenTimer += dt;
+      if (this.hiddenTimer >= WANTED.decaySeconds) {
+        this.level -= 1;
+        this.hiddenTimer = 0;
       }
-      // A wrecked police car (rammed hard) stops chasing.
-      if (car.damage > 80) {
-        car.wrecked = true;
-        car.mesh.rotation.z = 0.12;
-        city.smoke(car.x, 1.4, car.z);
-      }
+    } else {
+      this.hiddenTimer = 0;
     }
-    // Foot officers run at the player and hold them to arrest.
-    for (const cop of cops) {
-      const d = distance2D(px, pz, cop.x, cop.z);
-      if (d < POLICE.sightRange) seen = true;
-      if (playerCar) {
-        // Officers cannot catch a car: they jog after it and give up close in.
-        cop.arrest = 0;
-      } else if (d < POLICE.arrestRange) {
-        cop.arrest += dt;
-        arrestProgress = cop.arrest / POLICE.arrestTime;
-        if (cop.arrest >= POLICE.arrestTime && onArrested) onArrested();
-      } else {
-        cop.arrest = 0;
-        arrestProgress = 0;
-      }
-      if (d > 1.2 && !playerCar) {
-        // Turn toward the player gradually: a deflection from a wall must
-        // survive into the next frame instead of being overwritten.
-        walkToward(cop, px, pz, cop.speed * dt, dt);
-      }
-      cop.mesh.position.set(cop.x, 0, cop.z);
-      cop.mesh.rotation.y = cop.heading;
-      cop.mesh.userData.armL.rotation.x = Math.sin(performance.now() / 130) * 0.7;
-      cop.mesh.userData.armR.rotation.x = -Math.sin(performance.now() / 130) * 0.7;
-    }
-    // Wanted decay: stay unseen and the heat cools off.
-    if (wanted > 0) {
-      if (seen) hiddenTimer = 0;
-      else {
-        hiddenTimer += dt;
-        if (hiddenTimer > POLICE.decayDelay) {
-          wanted -= 1;
-          hiddenTimer = 0;
-        }
-      }
-    }
-    if (audio) audio.siren(wanted > 0 && cars.some((c) => !c.wrecked));
-    return { arrestProgress };
   }
+}
 
-  function clearAll() {
-    for (const car of cars) scene.remove(car.mesh);
-    for (const cop of cops) scene.remove(cop.mesh);
-    cars.length = 0;
-    cops.length = 0;
-    wanted = 0;
-    hiddenTimer = 0;
-    arrestProgress = 0;
-    if (audio) audio.siren(false);
-  }
+export function makeEnforcerMesh() {
+  const group = new THREE.Group();
+  const vest = new THREE.MeshLambertMaterial({ color: 0x1c1c22 });
+  const skin = new THREE.MeshLambertMaterial({ color: 0xc99b76 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 1.0, 8), vest);
+  body.position.y = 0.95;
+  group.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), skin);
+  head.position.y = 1.7;
+  group.add(head);
+  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.7), new THREE.MeshLambertMaterial({ color: 0x0c0c0c }));
+  gun.position.set(0.3, 1.15, 0.4);
+  group.add(gun);
+  return group;
+}
 
-  function damageNearestPoliceCar(x, z, amount) {
-    let best = null;
-    let bestD = 60;
-    for (const car of cars) {
-      if (car.wrecked) continue;
-      const d = distance2D(x, z, car.x, car.z);
-      if (d < bestD) { bestD = d; best = car; }
-    }
-    if (best) best.damage += amount;
-    return best;
-  }
-
+export function createEnforcer(x, z) {
+  const mesh = makeEnforcerMesh();
+  mesh.position.set(x, 0, z);
   return {
-    get wanted() { return wanted; },
-    set wanted(v) { wanted = clamp(v, 0, WANTED.max); },
-    addWanted, update, clearAll, damageNearestPoliceCar,
-    get cars() { return cars; },
-    get cops() { return cops; },
+    mesh,
+    x,
+    z,
+    health: 3,
+    shootTimer: 1.2,
+    heading: 0,
+    alive: true,
   };
+}
+
+// One enforcer's turn: face the player, and every couple of seconds
+// fire a shot that hurts if it lands. Returns the damage dealt.
+export function updateEnforcer(foe, dt, playerX, playerZ, onShot) {
+  if (!foe.alive) return 0;
+  const dx = playerX - foe.x;
+  const dz = playerZ - foe.z;
+  const dist = Math.hypot(dx, dz);
+  foe.heading = Math.atan2(dx, dz);
+  foe.mesh.rotation.y = foe.heading;
+  foe.shootTimer -= dt;
+  let damage = 0;
+  if (foe.shootTimer <= 0 && dist < 42) {
+    foe.shootTimer = 1.6 + Math.random() * 0.9;
+    // A shot lands a little more than half the time at close range.
+    const hitChance = dist < 14 ? 0.62 : 0.34;
+    if (Math.random() < hitChance) damage = 6 + Math.floor(Math.random() * 6);
+    if (onShot) onShot(foe, damage > 0);
+  }
+  return damage;
+}
+
+// Keep one police car per wanted star on the road, chasing the player.
+// Spawn points snap onto the nearest street line, so a fresh cop
+// never materialises inside a building.
+export function maintainPolice(policeCars, scene, wanted, playerX, playerZ, rng, colliders) {
+  const snap = (v) => {
+    const s = Math.round(v / 54) * 54;
+    return Math.abs(s - v) < 12 ? s : v;
+  };
+  while (policeCars.length < wanted.level) {
+    const angle = rng.range(0, Math.PI * 2);
+    let x = Math.max(-170, Math.min(170, playerX + Math.sin(angle) * 42));
+    let z = Math.max(-170, Math.min(170, playerZ + Math.cos(angle) * 42));
+    x = snap(x);
+    z = snap(z);
+    const car = createCar(0xf2f2f2, x, z, angle, { police: true, kind: 'police' });
+    scene.add(car.mesh);
+    policeCars.push(car);
+  }
+  while (policeCars.length > wanted.level) {
+    const car = policeCars.pop();
+    scene.remove(car.mesh);
+  }
+}
+
+export function updatePolice(policeCars, dt, colliders, playerX, playerZ, time) {
+  let nearest = Infinity;
+  for (const car of policeCars) {
+    updatePoliceCar(car, dt, colliders, playerX, playerZ, time);
+    const d = Math.hypot(car.x - playerX, car.z - playerZ);
+    if (d < nearest) nearest = d;
+  }
+  return nearest;
+}
+
+// A tracer line from a muzzle to its target, fading over half a second.
+export function makeTracer(scene, from, to) {
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(from.x, from.y, from.z),
+    new THREE.Vector3(to.x, to.y, to.z),
+  ]);
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.95 }));
+  scene.add(line);
+  return { line, life: 0.45 };
+}
+
+export function updateTracers(tracers, scene, dt) {
+  for (let i = tracers.length - 1; i >= 0; i -= 1) {
+    const t = tracers[i];
+    t.life -= dt;
+    t.line.material.opacity = Math.max(0, t.life / 0.45) * 0.95;
+    if (t.life <= 0) {
+      scene.remove(t.line);
+      t.line.geometry.dispose();
+      t.line.material.dispose();
+      tracers.splice(i, 1);
+    }
+  }
 }

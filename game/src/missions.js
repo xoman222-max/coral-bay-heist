@@ -1,182 +1,209 @@
-// Missions and story: six linked jobs for Marlo Vane, from the pier meeting
-// with Marina Sol to the vault job at the Coral Bay Bank. Each mission has a
-// title, a target point, dialogue lines, a reward, and a check that decides
-// when it is done. Missions can fail (arrested, or the car destroyed) and retry.
-import { MISSION_REWARDS } from './config.js';
-import { distance2D } from './random.js';
+// Coral Bay Heist — the story: six missions, in order.
+// The runner owns the marker, the briefing lines and the stage
+// logic; the game itself only answers the questions the runner asks
+// (where is the player, is that the Cruiser, are the enforcers dead).
 
-export const STORY_INTRO =
-  'Marlo Vane just walked out of Coral Bay prison after three years. ' +
-  'His old friend Marina Sol has one last plan: a string of jobs across the city, ' +
-  'ending with the vault of the Coral Bay Bank — and Sheriff Dray Cole, the crooked ' +
-  'lawman who put Marlo away, standing in the way. Drive fast, stay low, get paid.';
+import * as THREE from 'three';
+import { MISSIONS } from './config.js';
 
-// True when the player is within `radius` of a point.
-function near(state, x, z, radius) {
-  return distance2D(state.player.x, state.player.z, x, z) < radius;
+function makeMarker(scene) {
+  const group = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(3.2, 0.28, 10, 40),
+    new THREE.MeshBasicMaterial({ color: 0x2fe6c8 }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.25;
+  group.add(ring);
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.9, 0.9, 26, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0x2fe6c8, transparent: true, opacity: 0.22, side: THREE.DoubleSide }),
+  );
+  beam.position.y = 13;
+  group.add(beam);
+  const diamond = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.9),
+    new THREE.MeshBasicMaterial({ color: 0xffc94d }),
+  );
+  diamond.position.y = 4.2;
+  group.add(diamond);
+  group.visible = false;
+  scene.add(group);
+  return { group, ring, diamond };
 }
 
-// True when the player is driving the named car model near a point.
-function inCarNear(state, name, x, z, radius) {
-  return state.car && state.car.type.name === name && near(state, x, z, radius);
+function near(a, b, range) {
+  return Math.hypot(a.x - b.x, a.z - b.z) < range;
 }
 
-const MISSIONS = [
-  {
-    id: 1,
-    title: '1 — The Pier Meeting',
-    target: { x: -48, z: 132, label: 'Marina at the pier' },
-    objective: 'Meet Marina Sol at the end of the pier.',
-    dialog: [
-      ['Marina Sol', 'Marlo! Three years and you still walk like a delivery driver. Good — you will need that van... I mean, those legs.'],
-      ['Marlo Vane', 'Marina. You look like trouble that learned to dress well. What is the job?'],
-      ['Marina Sol', 'Six jobs, one vault, and Dray Cole breathing down our necks. First: wheels. The Coral Cruiser parked by the marina is ours tonight.'],
-    ],
-    reward: MISSION_REWARDS[0],
-    check(state) { return near(state, -48, 132, 6); },
-  },
-  {
-    id: 2,
-    title: '2 — Borrowed Wheels',
-    target: { x: 56, z: -48, label: 'Coral Cruiser' },
-    objective: 'Steal the red Coral Cruiser parked by the marina (press E near a car).',
-    dialog: [
-      ['Marina Sol', 'That Cruiser belongs to a Shark who owes me money. Take it. If the driver argues, argue back.'],
-      ['Marlo Vane', 'Borrowed, not stolen. I will return it... eventually. Probably not.'],
-    ],
-    reward: MISSION_REWARDS[1],
-    needsCar: 'Coral Cruiser',
-    check(state) { return inCarNear(state, 'Coral Cruiser', 56, -48, 30); },
-  },
-  {
-    id: 3,
-    title: '3 — Shake the Heat',
-    target: { x: -96, z: -48, label: 'Hideout alley' },
-    objective: 'Lose the police, then reach the hideout at the north-west crossroads.',
-    dialog: [
-      ['Marina Sol', 'Cole’s boys are on you already. Lose them — lay low, break line of sight, let the stars cool off.'],
-      ['Marlo Vane', 'I have not even had the car an hour and the whole city is after me. Feels like old times.'],
-    ],
-    reward: MISSION_REWARDS[2],
-    spawnWanted: 2,
-    check(state) { return state.wanted === 0 && near(state, -96, -48, 12); },
-  },
-  {
-    id: 4,
-    title: '4 — The Drop',
-    target: { x: 96, z: 96, label: 'Harbor warehouse' },
-    objective: 'Drive the package to the harbor warehouse. The Sharks will not let it go easy.',
-    dialog: [
-      ['Marina Sol', 'Package is in the trunk. The Sharks want it back — expect company at the warehouse.'],
-      ['Marlo Vane', 'Company I can handle. A delivery with a gunfight attached. Just like my old job, minus the tips.'],
-    ],
-    reward: MISSION_REWARDS[3],
-    enforcers: 3,
-    enforcerAt: { x: 96, z: 90 },
-    check(state) {
-      return state.car && near(state, 96, 96, 10) && state.enforcersLeft === 0;
-    },
-  },
-  {
-    id: 5,
-    title: '5 — The Bank Run',
-    target: { x: 0, z: -48, label: 'Coral Bay Bank' },
-    objective: 'Reach the Coral Bay Bank downtown and crack the vault door (stand at the marker).',
-    dialog: [
-      ['Marina Sol', 'This is it. The vault, the crew, the getaway. Dray Cole knows — his interceptors will be waiting.'],
-      ['Marlo Vane', 'Then we give them a chase worth remembering.'],
-    ],
-    reward: MISSION_REWARDS[4],
-    spawnWanted: 3,
-    enforcers: 2,
-    enforcerAt: { x: 0, z: -44 },
-    check(state) {
-      return near(state, 0, -48, 8) && state.enforcersLeft === 0;
-    },
-  },
-  {
-    id: 6,
-    title: '6 — The Getaway',
-    target: { x: -48, z: 132, label: 'Escape pier' },
-    objective: 'Escape to the pier with the loot. Lose the police on the way — 5 stars will not follow you home.',
-    dialog: [
-      ['Marina Sol', 'Vault is open, Marlo! Boat is waiting at the pier. Do not stop for anything — especially not the law.'],
-      ['Marlo Vane', 'One last drive. Coral Bay, you have been a terrible host. I am keeping the tip.'],
-    ],
-    reward: MISSION_REWARDS[5],
-    spawnWanted: 4,
-    check(state) { return near(state, -48, 132, 8); },
-  },
-];
-
-export function createMissions() {
-  let index = 0;          // 0-based into MISSIONS
-  let started = false;
-  let done = false;
-  let lineIndex = 0;
-  let atTargetTimer = 0;
-
-  function current() { return MISSIONS[index] || null; }
-
-  function restart() {
-    started = true;
-    index = 0;
-    lineIndex = 0;
-    done = false;
-    atTargetTimer = 0;
+export class MissionRunner {
+  constructor(scene) {
+    this.scene = scene;
+    this.index = -1; // no mission running
+    this.stage = 0;
+    this.crack = 0;
+    this.marker = makeMarker(scene);
+    this.lines = [];
+    this.lineTimer = 0;
+    this.currentLine = '';
+    this.done = false;
   }
 
-  function setIndex(i) {
-    index = Math.max(0, Math.min(MISSIONS.length - 1, i));
-    lineIndex = 0;
-    atTargetTimer = 0;
+  get def() {
+    return this.index >= 0 ? MISSIONS[this.index] : null;
   }
 
-  // Returns 'complete' | 'failed' | 'advanced' | null each frame. A mission
-  // only advances after the player holds the target for 0.6 s, so driving
-  // through it at speed does not count.
-  function update(dt, state) {
-    const m = current();
-    if (!m || done) return null;
-    if (state.failed) return 'failed';
-    if (m.check(state)) {
-      atTargetTimer += dt;
-      if (atTargetTimer > 0.6) {
-        index += 1;
-        lineIndex = 0;
-        atTargetTimer = 0;
-        if (index >= MISSIONS.length) { done = true; return 'complete'; }
-        return 'advanced';
-      }
-    } else {
-      atTargetTimer = 0;
+  get markerPos() {
+    if (!this.marker.group.visible) return null;
+    return { x: this.marker.group.position.x, z: this.marker.group.position.z };
+  }
+
+  start(index, ctx) {
+    this.index = index;
+    this.stage = 0;
+    this.crack = 0;
+    this.done = false;
+    const def = MISSIONS[index];
+    this.lines = def.brief.slice();
+    this.lineTimer = 0;
+    this.currentLine = '';
+    if (def.startWanted) ctx.setWanted(def.startWanted);
+    if (def.id === 'cruiser') ctx.spawnCruiser(def.cruiserSpot);
+    this.placeMarker(ctx);
+    ctx.setObjective(`${def.title} — ${this.stageText()}`);
+  }
+
+  stageText() {
+    const def = this.def;
+    if (!def) return '';
+    switch (def.id) {
+      case 'errand': return this.stage === 0 ? 'Pick up the parcel' : 'Deliver it to Marina';
+      case 'cruiser': return 'Steal the Coral Cruiser';
+      case 'heat': return 'Lose the cops — get to zero stars';
+      case 'warehouse': return this.stage === 0 ? 'Reach the warehouse' : 'Take out the enforcers';
+      case 'heist': return this.stage === 0 ? 'Reach the casino vault' : 'Hold still — crack the vault';
+      case 'getaway': return 'Reach the boat at the harbor';
+      default: return '';
     }
-    return null;
   }
 
-  function nextDialogLine() {
-    const m = current();
-    if (!m) return null;
-    if (lineIndex >= m.dialog.length) return null;
-    return m.dialog[lineIndex++];
+  placeMarker(ctx) {
+    const def = this.def;
+    if (!def) return;
+    let at = null;
+    if (def.id === 'errand') at = this.stage === 0 ? def.pickup : def.dropoff;
+    else if (def.id === 'cruiser') at = def.cruiserSpot;
+    else if (def.id === 'warehouse') at = def.warehouse;
+    else if (def.id === 'heist') at = def.vault;
+    else if (def.id === 'getaway') at = def.boat;
+    if (at) {
+      this.marker.group.position.set(at.x, 0, at.z);
+      this.marker.group.visible = true;
+    } else {
+      this.marker.group.visible = false;
+    }
   }
 
-  function dialogLeft() {
-    const m = current();
-    return m ? m.dialog.length - lineIndex : 0;
+  hideMarker() {
+    this.marker.group.visible = false;
   }
 
-  return {
-    get index() { return index; },
-    get started() { return started; },
-    get done() { return done; },
-    get total() { return MISSIONS.length; },
-    current,
-    start: restart,
-    reset: restart,
-    setIndex,
-    update,
-    nextDialogLine,
-    dialogLeft,
-  };
+  // One line of briefing at a time, each on screen for a few seconds.
+  updateLines(dt, ctx) {
+    if (this.lines.length === 0) return;
+    this.lineTimer -= dt;
+    if (this.lineTimer <= 0) {
+      this.currentLine = this.lines.shift();
+      this.lineTimer = 3.4;
+      ctx.showLine(this.currentLine);
+    }
+  }
+
+  complete(ctx) {
+    const def = this.def;
+    ctx.addCash(def.reward);
+    ctx.showLine(def.complete);
+    ctx.showToast(`${def.title} complete — +$${def.reward}`);
+    this.hideMarker();
+    this.done = true;
+    const next = this.index + 1;
+    this.index = -1;
+    if (next >= MISSIONS.length) {
+      ctx.onGameWon();
+    } else {
+      ctx.onMissionComplete(next);
+    }
+  }
+
+  update(dt, ctx, time) {
+    // Marker pulse.
+    if (this.marker.group.visible) {
+      const s = 1 + Math.sin(time * 3) * 0.08;
+      this.marker.ring.scale.set(s, s, 1);
+      this.marker.diamond.rotation.y += dt * 2;
+      this.marker.diamond.position.y = 4.2 + Math.sin(time * 2) * 0.4;
+    }
+    this.updateLines(dt, ctx);
+    if (this.index < 0 || this.done) return;
+    const def = this.def;
+    const pos = ctx.playerPos();
+    switch (def.id) {
+      case 'errand': {
+        const target = this.stage === 0 ? def.pickup : def.dropoff;
+        if (near(pos, target, 4.5)) {
+          if (this.stage === 0) {
+            this.stage = 1;
+            ctx.showLine('Parcel picked up. Now get it to Marina.');
+            this.placeMarker(ctx);
+            ctx.setObjective(`${def.title} — ${this.stageText()}`);
+          } else {
+            this.complete(ctx);
+          }
+        }
+        break;
+      }
+      case 'cruiser': {
+        if (ctx.isDrivingCruiser()) this.complete(ctx);
+        break;
+      }
+      case 'heat': {
+        if (ctx.wantedLevel() === 0) this.complete(ctx);
+        break;
+      }
+      case 'warehouse': {
+        if (this.stage === 0) {
+          if (near(pos, def.warehouse, 12)) {
+            this.stage = 1;
+            ctx.spawnEnforcers(def.enforcers, def.warehouse);
+            ctx.setObjective(`${def.title} — ${this.stageText()}`);
+            ctx.showLine('Marlo Vane: "There they are. Make it count."');
+          }
+        } else if (ctx.enforcersLeft() === 0) {
+          this.complete(ctx);
+        }
+        break;
+      }
+      case 'heist': {
+        if (this.stage === 0) {
+          if (near(pos, def.vault, 4.5)) {
+            this.stage = 1;
+            ctx.setWanted(2);
+            ctx.setObjective(`${def.title} — ${this.stageText()}`);
+            ctx.showLine('Marina Sol: "The alarm is up. Hold it together."');
+          }
+        } else if (near(pos, def.vault, 6)) {
+          this.crack += dt;
+          ctx.setObjective(`${def.title} — cracking the vault ${Math.min(99, Math.floor((this.crack / def.crackSeconds) * 100))}%`);
+          if (this.crack >= def.crackSeconds) this.complete(ctx);
+        }
+        break;
+      }
+      case 'getaway': {
+        if (near(pos, def.boat, 6)) this.complete(ctx);
+        break;
+      }
+      default:
+        break;
+    }
+  }
 }
