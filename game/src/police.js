@@ -146,13 +146,16 @@ export function createPolice(scene, city, rand, audio) {
         // survive into the next frame instead of being overwritten.
         cop.heading += clamp(angleDiff(cop.heading, want), -3.5 * dt, 3.5 * dt);
         const step = cop.speed * dt;
-        const nx = cop.x + Math.sin(cop.heading) * step;
-        const nz = cop.z + Math.cos(cop.heading) * step;
-        // Slide along walls instead of getting stuck on them.
-        if (!city.isBlocked(nx, nz, 0.5)) { cop.x = nx; cop.z = nz; }
-        else if (!city.isBlocked(nx, cop.z, 0.5)) cop.x = nx;
-        else if (!city.isBlocked(cop.x, nz, 0.5)) cop.z = nz;
-        else cop.heading += Math.PI / 2;
+        // Try forward, then the two sides, then back: a wall in front must
+        // send the cop around the building instead of pinning him to it.
+        const dirs = [cop.heading, cop.heading + Math.PI / 2, cop.heading - Math.PI / 2, cop.heading + Math.PI];
+        let moved = false;
+        for (const dir of dirs) {
+          const tx = cop.x + Math.sin(dir) * step;
+          const tz = cop.z + Math.cos(dir) * step;
+          if (!city.isBlocked(tx, tz, 0.5)) { cop.x = tx; cop.z = tz; moved = true; break; }
+        }
+        if (!moved) cop.heading += Math.PI / 2;
       }
       cop.mesh.position.set(cop.x, 0, cop.z);
       cop.mesh.rotation.y = cop.heading;

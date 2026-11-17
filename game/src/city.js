@@ -114,15 +114,21 @@ export function buildCity(scene, rand) {
   const buildings = new THREE.Group();
   group.add(buildings);
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  for (let bx = -2; bx <= 2; bx += 1) {
-    for (let bz = -2; bz <= 2; bz += 1) {
-      const cx = bx * PITCH;
-      const cz = bz * PITCH;
-      // Four buildings per block, leaving a small plaza gap in the middle.
+  // Parcels are the land BETWEEN streets: streets run at multiples of 48, so
+  // parcels are centred at -120, -72, -24, 24, 72, 120. Buildings used to sit
+  // on the street coordinates themselves and their corners jutted into the
+  // road, trapping traffic and police; parcels keep every road clear.
+  // The southern row is skipped: that edge is the beach and the pier.
+  for (let px = 0; px < 6; px += 1) {
+    for (let pz = 0; pz < 5; pz += 1) {
+      const cx = -120 + px * PITCH;
+      const cz = -120 + pz * PITCH;
+      // Four buildings per parcel, leaving a small plaza gap in the middle.
       for (const [ox, oz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]]) {
-        const w = range(rand, 10, 15);
-        const d = range(rand, 10, 15);
-        const h = range(rand, CITY.buildingMin, CITY.buildingMax) * (Math.abs(bx) + Math.abs(bz) === 0 ? 1.6 : 1);
+        const w = range(rand, 10, 13);
+        const d = range(rand, 10, 13);
+        const downtown = Math.abs(cx) <= 24 && Math.abs(cz) <= 24;
+        const h = range(rand, CITY.buildingMin, CITY.buildingMax) * (downtown ? 1.6 : 1);
         const color = pick(rand, PALETTE.building);
         const mesh = new THREE.Mesh(boxGeo, lambert(color));
         mesh.scale.set(w, h, d);

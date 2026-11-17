@@ -631,12 +631,16 @@ function updateEnforcers(dt) {
       const want = Math.atan2(player.x - ped.x, player.z - ped.z);
       ped.heading = want;
       const step = 3.4 * dt;
-      const nx = ped.x + Math.sin(want) * step;
-      const nz = ped.z + Math.cos(want) * step;
-      if (!city.isBlocked(nx, nz, 0.5)) { ped.x = nx; ped.z = nz; }
-      else if (!city.isBlocked(nx, ped.z, 0.5)) ped.x = nx;
-      else if (!city.isBlocked(ped.x, nz, 0.5)) ped.z = nz;
-      else ped.heading += Math.PI / 2;
+      // Try forward, then the two sides, then back, so enforcers walk
+      // around buildings instead of pressing against them.
+      const dirs = [want, want + Math.PI / 2, want - Math.PI / 2, want + Math.PI];
+      let moved = false;
+      for (const dir of dirs) {
+        const tx = ped.x + Math.sin(dir) * step;
+        const tz = ped.z + Math.cos(dir) * step;
+        if (!city.isBlocked(tx, tz, 0.5)) { ped.x = tx; ped.z = tz; moved = true; break; }
+      }
+      if (!moved) ped.heading += Math.PI / 2;
     }
   }
 }
