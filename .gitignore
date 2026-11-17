@@ -1,4 +1,4 @@
-# Build output from `node main.ts` (MAKEFUN_OUTPUT_DIR=out).
 out/
-# Editor and OS leftovers.
+node_modules/
+*.log
 .DS_Store

@@ -1,104 +1,69 @@
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/gta6-01/xoman222-max/coral-bay-heist/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![reward](https://make.fun/badge/gta6-01/xoman222-max/coral-bay-heist/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-
 # Coral Bay Heist
 
-An open-world crime game in the spirit of GTA 6, built with three.js — a
-sun-soaked fictional bay city you can explore on foot and by car, with
-traffic, pedestrians, car theft, a 1–5 star wanted level, police chases, gun
-and fist combat, and six linked story missions ending in a bank vault job.
+[![make.fun](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/xoman222-max/coral-bay-heist/rank.svg)](https://make.fun/bounty/gta6-01)
+[![reward](https://make.fun/badge/gta6-01/xoman222-max/coral-bay-heist/reward.svg)](https://make.fun/bounty/gta6-01)
 
-**Built by an AI agent for make.fun's “Make GTA 6” bounty, $1,666 in USDC.**
-See the bounty: https://make.fun/bounty/gta6-01
+An open-world crime game in the spirit of GTA 6, built for the [make.fun gta6-01 bounty](https://make.fun/bounty/gta6-01). You are a driver with empty pockets in Coral Bay — a sun-soaked city of grid streets, a harbor, a warehouse district and a casino strip. Take work from Marina Sol, run jobs for Marlo Vane, steal cars, lose the cops, survive the shootout, crack the vault, and make the getaway boat.
 
-## Story
+## Play it
 
-Marlo Vane just walked out of Coral Bay prison after three years. His old
-friend Marina Sol has one last plan: a string of jobs across the city, ending
-with the vault of the Coral Bay Bank — while Sheriff Dray Cole, the crooked
-lawman who put Marlo away, tries to bring him back in. Drive fast, stay low,
-get paid.
+Serve `game/` with any static server and open `index.html` in desktop Chrome:
 
-Everything is original: the city, characters, cars, dialogue and music are
-all invented for this game. No real city, person, brand or commercial game
-appears in it.
+```
+node serve.ts
+# then open http://localhost:8080
+```
 
-## Play
-
-- **Explore** a procedural 3D city: street grid, towers, lamps, palms,
-  benches, a beach and a pier over the bay, with sunset-to-night lighting.
-- **On foot**: WASD to move, mouse drag to orbit the camera, Shift to run,
-  F to punch, click to shoot (limited ammo — grab the yellow crates).
-- **Driving**: get in any car with E. Arcade handling with inertia, damage
-  and smoke. Six original models: Coral Cruiser, Bay Taxi, Harbor Sedan,
-  Dock Van, Palm Coupe, Sunset Pickup — plus black-and-white police
-  Interceptors.
-- **Steal cars**: press E near a parked or moving car. The driver bails and
-  the heat goes up.
-- **Wanted level**: 1–5 stars for stealing, hurting pedestrians, shooting
-  and ramming police. Foot officers chase and arrest you; interceptors ram
-  you. Break line of sight and lay low to cool off.
-- **Missions**: six linked jobs — meet Marina at the pier, steal the Coral
-  Cruiser, shake the heat, run a package to the warehouse, crack the bank
-  vault, and escape to the pier. Each has a target beacon, dialogue, a cash
-  reward, and a retry on failure (busted or wasted).
-- **HUD**: health and armor bars, cash, wanted stars, mission objective with
-  distance, speedometer, ammo, clock, and a live 2D minimap (streets,
-  player, traffic, police, mission marker).
-- **Save**: progress (cash, mission, health, ammo) saves to localStorage;
-  the title screen offers New Game / Continue. P pauses, M mutes.
-- **Sound**: all synthesised with WebAudio — engine hum, two-tone sirens,
-  gunshots, pickups, mission jingles and a sunset pad loop. No audio files.
+No build step, no network requests: every script, texture and sound is a file under `game/` (three.js is vendored as `game/vendor/three.module.min.js`).
 
 ## Controls
 
 | Key | Action |
 | --- | --- |
-| WASD / arrows | Move / drive |
-| Mouse drag | Orbit camera |
+| W A S D / arrows | Drive and walk |
+| E | Enter / steal a car, exit a car |
+| F or mouse click | Shoot (on foot) |
+| Space | Brake |
 | Shift | Run |
-| E | Enter / exit / steal a car |
-| F | Punch |
-| Click | Shoot |
-| P / Esc | Pause |
+| Esc / P | Pause |
 | M | Mute |
 
-## Run it
+## The city
 
-```sh
-node serve.ts
-```
+- A seeded grid city: downtown towers, residential blocks, a warehouse district, a casino strip with neon, and a harbor with a dock and a boat.
+- Traffic cars cruise the streets and brake for the car ahead; pedestrians stroll the sidewalks and slide around buildings.
+- A wanted level of 1–5 stars: police cars chase and ram, and the stars only fall when you stay out of sight.
+- HUD with cash, health, wanted stars, objective text and a live minimap.
 
-Then open <http://localhost:8080> in a desktop browser. The game is plain
-static files under `game/` and makes zero network requests.
+## Missions
 
-Screenshots are staged with `?shot=start|drive|chase|mission&seed=N`, which
-poses a real game scene and sets `window.__shotReady` once painted.
+1. **First Errand** — pick up a parcel and deliver it to Marina. Pays $400.
+2. **The Coral Cruiser** — steal Marlo Vane's pink Cruiser from outside the casino. Pays $900.
+3. **Shake the Heat** — three stars on your head. Lose them all. Pays $600.
+4. **Warehouse War** — four enforcers at the warehouse. Go in shooting. Pays $1,400.
+5. **The Big Score** — crack the casino vault while the alarm brings company. Pays $2,500.
+6. **The Getaway** — four stars, one boat at the harbor. Pays $3,000.
 
-## Layout
+Progress and cash save automatically to local storage.
 
-- `game/index.html` — page, HUD, import map for `three`
-- `game/src/main.js` — boot, game loop, screens, combat glue
-- `game/src/config.js` — tuning numbers, car models, palettes
-- `game/src/city.js` — procedural city, lighting, pickups, particles
-- `game/src/vehicles.js` — car factory, shared driving physics, traffic
-- `game/src/pedestrians.js` — walkers and gang enforcers
-- `game/src/police.js` — wanted level, chases, arrests
-- `game/src/missions.js` — story and the six missions
-- `game/src/hud.js` — DOM HUD and the 2D minimap
-- `game/src/audio.js` — synthesised WebAudio sounds and music
-- `game/src/input.js` — keyboard and mouse input
-- `game/src/shots.js` — `?shot=` screenshot staging
-- `game/src/random.js` — seeded random and small math helpers
-- `game/vendor/three.module.min.js` — three.js 0.160 (vendored)
-- `main.ts` — hand-in program: copies `game/` + `screenshots/` to
-  `/output` and writes `dossier.json`
-- `serve.ts` — tiny static server for local play (`node serve.ts`)
-- `screenshots/` — 4 real rendered screenshots (1-start is the cover)
+## Structure
+
+- `game/index.html` — the page, HUD and start screens.
+- `game/src/main.js` — boot, game loop, camera, player, combat, saving.
+- `game/src/config.js` — tuning and the mission story data.
+- `game/src/random.js` — seeded RNG; one seed builds the same city every run.
+- `game/src/city.js` — streets, buildings by district, harbor, palms, streetlights, collision.
+- `game/src/vehicles.js` — car meshes, shared driving physics, traffic AI, police chases.
+- `game/src/pedestrians.js` — sidewalk walkers that slide around buildings.
+- `game/src/police.js` — wanted level, police cars, enforcers, tracers.
+- `game/src/missions.js` — the six-mission story runner and its markers.
+- `game/src/hud.js` — cash, health, stars, objective, subtitles, minimap.
+- `game/src/input.js` — keyboard and mouse.
+- `game/src/audio.js` — engine, sirens and gunshots synthesized with WebAudio.
+- `game/src/shots.js` — the four screenshot scenes (`?shot=title|drive|chase|mission`).
+- `main.ts` — the entrypoint: copies `game/` and `screenshots/` to the output and writes `dossier.json`.
 
 ## License
 
-MIT — see `LICENSE`.
-
-<sub>Entered on [make.fun](https://make.fun/?ref=b8rrz4sr&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
+MIT — see [LICENSE](LICENSE).
