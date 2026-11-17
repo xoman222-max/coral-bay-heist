@@ -1,7 +1,10 @@
 // Coral Bay Heist — every tuning number in one place.
-// The city is a grid of blocks centred on the origin; streets run every BLOCK+STREET units.
-// The bay (water + pier) lies to the south, past z = CITY_HALF.
+//
+// The city is a grid of blocks centred on the origin; streets run every
+// PITCH units (block size + street width). The bay (water + pier) lies to
+// the south, past z = CITY.half.
 export const STEP = 1 / 60;
+
 export const CITY = {
   blocks: 5,            // blocks per side
   blockSize: 34,
@@ -10,6 +13,10 @@ export const CITY = {
   buildingMin: 8,
   buildingMax: 46,
 };
+
+// Distance between neighbouring street centrelines.
+export const PITCH = CITY.blockSize + CITY.streetWidth; // 48
+
 export const PLAYER = {
   walkSpeed: 6.5,
   runSpeed: 11,
@@ -26,6 +33,7 @@ export const PLAYER = {
   startAmmo: 24,
   startCash: 500,
 };
+
 export const CAR = {
   accel: 26,
   brake: 42,
@@ -35,7 +43,8 @@ export const CAR = {
   grip: 6,
   maxDamage: 100,
 };
-// Car models: name, body colour, top speed factor, size (length, width), kind.
+
+// Car models: name, body colour, top-speed factor, size (length, width), kind.
 export const CAR_TYPES = [
   { name: 'Coral Cruiser', color: 0xff4d6d, speed: 1.25, len: 4.6, wid: 2.0, kind: 'sport' },
   { name: 'Bay Taxi', color: 0xffc93c, speed: 1.0, len: 4.4, wid: 1.9, kind: 'taxi' },
@@ -44,6 +53,7 @@ export const CAR_TYPES = [
   { name: 'Palm Coupe', color: 0x2ec4b6, speed: 1.15, len: 4.3, wid: 1.9, kind: 'sport' },
   { name: 'Sunset Pickup', color: 0xff7b2f, speed: 0.95, len: 4.8, wid: 2.0, kind: 'pickup' },
 ];
+
 export const POLICE = {
   carColor: 0x1a1a2e,
   chaseSpeed: 34,
@@ -53,6 +63,8 @@ export const POLICE = {
   decayDelay: 25,       // seconds hidden from police before a star drops
   sightRange: 70,
 };
+
+// Wanted stars added per crime.
 export const WANTED = {
   stealCar: 1,
   hitPed: 1,
@@ -61,6 +73,7 @@ export const WANTED = {
   ramPolice: 1,
   max: 5,
 };
+
 export const PALETTE = {
   skyDay: 0x87b5e0, skyDusk: 0xff9a5c, skyNight: 0x0d1530,
   road: 0x4a505e, sidewalk: 0x9aa0ab, ground: 0x4a7a58,
@@ -69,6 +82,9 @@ export const PALETTE = {
   windowLit: 0xffd97a, windowDark: 0x1c2733,
   leaf: 0x2e8b57, trunk: 0x6b4a2f, lamp: 0xffe9a8,
 };
+
 export const SAVE_KEY = 'coral-bay-heist.save.v1';
 export const BEST_KEY = 'coral-bay-heist.best.v1';
+
+// Cash paid for missions 1..6.
 export const MISSION_REWARDS = [400, 900, 1400, 1800, 2500, 6000];

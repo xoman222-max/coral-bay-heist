@@ -23,25 +23,27 @@ const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 const gameDir = join(repoRoot, 'game');
 const shotsDir = join(repoRoot, 'screenshots');
 
-// Copy the whole static game, then the screenshots beside it.
-mkdirSync(outputDir, { recursive: true });
-cpSync(gameDir, join(outputDir, 'game'), { recursive: true });
-mkdirSync(join(outputDir, 'screenshots'), { recursive: true });
-if (existsSync(shotsDir)) {
-  cpSync(shotsDir, join(outputDir, 'screenshots'), { recursive: true });
-}
-
 // The scorer's own caps: the dossier text is capped at 160 KiB, at most 4
 // screenshots of at most 256 KiB each, and game/ holds at most 993 files
 // totalling 48 MiB with no path over 1000 bytes. These numbers mirror the
 // gate so an entry this program accepts is one the scorer accepts.
-writeFileSync(
-  join(outputDir, 'dossier.json'),
-  buildDossier(outputDir, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  }),
-);
+const DOSSIER_LIMITS = {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+  game_path_max_bytes: 1000,
+};
+
+function copyEntry() {
+  mkdirSync(outputDir, { recursive: true });
+  // Copy the whole static game, then the screenshots beside it.
+  cpSync(gameDir, join(outputDir, 'game'), { recursive: true });
+  mkdirSync(join(outputDir, 'screenshots'), { recursive: true });
+  if (existsSync(shotsDir)) {
+    cpSync(shotsDir, join(outputDir, 'screenshots'), { recursive: true });
+  }
+  writeFileSync(join(outputDir, 'dossier.json'), buildDossier(outputDir, DOSSIER_LIMITS));
+}
+
+copyEntry();
