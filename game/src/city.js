@@ -2,15 +2,39 @@
 // heights and colours, lamps, palms, benches, a beach and a pier over the bay,
 // and a sun that slides from sunset gold into night. Also owns the collision
 // boxes, the pickup spawns, the mission beacon and the particle pool.
+//
+// The build consumes the seeded random in a fixed order, so a given seed
+// always builds the same city — which is what makes ?shot= repeatable.
 import * as THREE from 'three';
-import { CITY, PALETTE } from './config.js';
+import { CITY, PALETTE, PITCH } from './config.js';
 import { pick, range } from './random.js';
 
-const PITCH = CITY.blockSize + CITY.streetWidth; // 48
 const HALF = CITY.half;
 
 function lambert(color, opts) {
   return new THREE.MeshLambertMaterial(Object.assign({ color }, opts || {}));
+}
+
+// A palm tree: a leaning trunk with six flat leaves on top.
+function makePalm(rand) {
+  const g = new THREE.Group();
+  const trunkHeight = range(rand, 4, 6.5);
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.3, trunkHeight, 6),
+    lambert(PALETTE.trunk),
+  );
+  trunk.position.y = trunkHeight / 2;
+  trunk.rotation.z = (rand() - 0.5) * 0.2;
+  g.add(trunk);
+  for (let i = 0; i < 6; i += 1) {
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.7), lambert(PALETTE.leaf));
+    const a = (i / 6) * Math.PI * 2;
+    leaf.position.set(Math.cos(a) * 1.1, trunkHeight + 0.2, Math.sin(a) * 1.1);
+    leaf.rotation.y = -a;
+    leaf.rotation.z = 0.5;
+    g.add(leaf);
+  }
+  return g;
 }
 
 export function buildCity(scene, rand) {
@@ -20,8 +44,86 @@ export function buildCity(scene, rand) {
   const dummy = new THREE.Object3D(); // scratch transform for instanced meshes
   const group = new THREE.Group();
   scene.add(group);
+  const streetCoords = [];
+  for (let i = -2; i <= 2; i += 1) streetCoords.push(i * PITCH);
 
-  // --- Ground, roads, sidewalks, beach and bay -------------------------------
+  buildGround(group, streetCoords);
+  const water = buildWater(group, colliders);
+  const windowMeshes = buildBuildings(group, rand, colliders, streetCoords);
+  group.add(windowMeshes.lit);
+  group.add(windowMeshes.dark);
+  const lampHeads = buildStreetProps(group, rand, streetCoords);
+  buildPickups(group, rand, pickups, streetCoords);
+  const beacon = buildBeacon(scene);
+  const particles = buildParticles(scene, rand);
+  const lights = buildLights(scene);
+
+  // --- Time of day -------------------------------------------------------------
+  function setTimeOfDay(hours) {
+    // hours 0..24; sunset ~18.5, night after 20. Sun elevation follows a sine.
+    const t = ((hours - 6) / 12) * Math.PI; // 6h sunrise, 18h sunset
+    const elev = Math.sin(t);
+    const day = Math.max(0, Math.min(1, elev * 1.6 + 0.25));
+    const dusk = Math.max(0, 1 - Math.abs(elev) * 3) * (hours > 12 ? 1 : 0.4);
+    const sky = new THREE.Color(PALETTE.skyDay).lerp(new THREE.Color(PALETTE.skyNight), 1 - day);
+    sky.lerp(new THREE.Color(PALETTE.skyDusk), dusk * 0.7);
+    scene.background = sky;
+    scene.fog.color.copy(sky);
+    lights.sun.intensity = 1.35 + day * 2.0;
+    lights.sun.color.setHex(dusk > 0.4 ? 0xff8c4a : 0xfff2d0);
+    lights.sun.position.set(Math.cos(t) * 120, Math.max(12, elev * 120 + 20), -60);
+    lights.hemi.intensity = 0.9 + day * 0.6;
+    const lampOn = day < 0.45;
+    for (const head of lampHeads) {
+      if (head.isPointLight) head.intensity = lampOn ? 14 : 0;
+      else head.material.color.setHex(lampOn ? PALETTE.lamp : 0x555a66);
+    }
+  }
+
+  function isBlocked(x, z, r) {
+    if (Math.abs(x) > HALF + 20 || Math.abs(z) > HALF + 55) return true;
+    for (const c of colliders) {
+      if (c.low) continue;
+      if (x + r > c.minX && x - r < c.maxX && z + r > c.minZ && z - r < c.maxZ) return true;
+    }
+    return false;
+  }
+
+  function update(dt, time, hours) {
+    setTimeOfDay(hours);
+    beacon.ring.rotation.z += dt * 1.5;
+    beacon.beam.material.opacity = 0.2 + Math.sin(time * 3) * 0.08;
+    for (const p of pickups) {
+      if (p.taken) continue;
+      p.mesh.children[0].position.y = 0.9 + Math.sin(time * 2 + p.bob) * 0.25;
+      p.mesh.children[0].rotation.y += dt * 1.5;
+    }
+    particles.update(dt);
+    water.position.y = -0.2 + Math.sin(time * 0.8) * 0.08;
+  }
+
+  // Street points for traffic / pedestrian spawns.
+  for (const c of streetCoords) {
+    for (let d = -HALF + 10; d < HALF - 8; d += 24) {
+      streetPoints.push({ x: c, z: d, alongZ: true });
+      streetPoints.push({ x: d, z: c, alongZ: false });
+    }
+  }
+
+  return {
+    colliders, pickups, streetPoints, beacon: beacon.group, streetCoords,
+    isBlocked, update, setTimeOfDay,
+    spawnParticles: particles.spawn,
+    sparks(x, y, z) { particles.spawn(x, y, z, 0xffc93c, 12, 9, 0.6, 12); },
+    smoke(x, y, z) { particles.spawn(x, y, z, 0x555555, 6, 3, 1.4, -1.5); },
+    muzzle(x, y, z) { particles.spawn(x, y, z, 0xffe27a, 6, 6, 0.12, 0); },
+    blood(x, y, z) { particles.spawn(x, y, z, 0xc0392b, 10, 7, 0.5, 14); },
+  };
+}
+
+// --- Ground, roads, sidewalks ---------------------------------------------------
+function buildGround(group, streetCoords) {
+  const dummy = new THREE.Object3D();
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(HALF * 2 + 220, HALF * 2 + 220),
     lambert(PALETTE.ground),
@@ -33,8 +135,6 @@ export function buildCity(scene, rand) {
   const dashSpots = [];
   const roadMat = lambert(PALETTE.road);
   const walkMat = lambert(PALETTE.sidewalk);
-  const streetCoords = [];
-  for (let i = -2; i <= 2; i += 1) streetCoords.push(i * PITCH);
   // Road strips (both directions) + centre dashes.
   for (const c of streetCoords) {
     for (const horizontal of [true, false]) {
@@ -72,8 +172,12 @@ export function buildCity(scene, rand) {
   });
   dashInst.instanceMatrix.needsUpdate = true;
   group.add(dashInst);
+}
 
-  // Beach strip and bay water to the south (positive z).
+// --- Beach, bay and pier ---------------------------------------------------------
+// Returns the water mesh (its surface bobs in update). The pier collider is
+// marked low: it blocks the player but the beacon/pickups ignore it.
+function buildWater(group, colliders) {
   const sand = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 220, 26), lambert(PALETTE.sand));
   sand.rotation.x = -Math.PI / 2;
   sand.position.set(0, 0.0, HALF + 13);
@@ -97,12 +201,19 @@ export function buildCity(scene, rand) {
     post.position.set(-51.5 + (i % 2) * 7, 0.4, HALF + 16 + i * 9);
     group.add(post);
   }
+  return water;
+}
 
-  // --- Buildings --------------------------------------------------------------
-  // Windows are InstancedMeshes (one for lit, one for dark): 2500 separate
-  // window meshes would cost hundreds of draw calls; two instanced draws do it.
-  const windowLitMat = new THREE.MeshBasicMaterial({ color: PALETTE.windowLit });
-  const windowDarkMat = new THREE.MeshBasicMaterial({ color: PALETTE.windowDark });
+// --- Buildings -------------------------------------------------------------------
+// Windows are InstancedMeshes (one for lit, one for dark): 2500 separate
+// window meshes would cost hundreds of draw calls; two instanced draws do it.
+// Parcels are the land BETWEEN streets: streets run at multiples of PITCH, so
+// parcels are centred at -120, -72, -24, 24, 72, 120. Buildings used to sit
+// on the street coordinates themselves and their corners jutted into the
+// road, trapping traffic and police; parcels keep every road clear.
+// The southern row is skipped: that edge is the beach and the pier.
+function buildBuildings(group, rand, colliders, streetCoords) {
+  const dummy = new THREE.Object3D();
   const litWindows = [];
   const darkWindows = [];
   function addWindow(x, y, z, rotY) {
@@ -114,11 +225,6 @@ export function buildCity(scene, rand) {
   const buildings = new THREE.Group();
   group.add(buildings);
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  // Parcels are the land BETWEEN streets: streets run at multiples of 48, so
-  // parcels are centred at -120, -72, -24, 24, 72, 120. Buildings used to sit
-  // on the street coordinates themselves and their corners jutted into the
-  // road, trapping traffic and police; parcels keep every road clear.
-  // The southern row is skipped: that edge is the beach and the pier.
   for (let px = 0; px < 6; px += 1) {
     for (let pz = 0; pz < 5; pz += 1) {
       const cx = -120 + px * PITCH;
@@ -164,14 +270,20 @@ export function buildCity(scene, rand) {
 
   // Flush the collected windows into two instanced draws.
   const winGeo = new THREE.PlaneGeometry(1.6, 1.8);
-  for (const [list, mat] of [[litWindows, windowLitMat], [darkWindows, windowDarkMat]]) {
-    const inst = new THREE.InstancedMesh(winGeo, mat, Math.max(1, list.length));
-    list.forEach((m, i) => inst.setMatrixAt(i, m));
-    inst.instanceMatrix.needsUpdate = true;
-    buildings.add(inst);
-  }
+  const lit = new THREE.InstancedMesh(winGeo, new THREE.MeshBasicMaterial({ color: PALETTE.windowLit }), Math.max(1, litWindows.length));
+  litWindows.forEach((m, i) => lit.setMatrixAt(i, m));
+  lit.instanceMatrix.needsUpdate = true;
+  const dark = new THREE.InstancedMesh(winGeo, new THREE.MeshBasicMaterial({ color: PALETTE.windowDark }), Math.max(1, darkWindows.length));
+  darkWindows.forEach((m, i) => dark.setMatrixAt(i, m));
+  dark.instanceMatrix.needsUpdate = true;
+  return { lit, dark };
+}
 
-  // --- Street lamps, palms along the roads, benches ----------------------------
+// --- Street lamps, palms along the roads, benches ---------------------------------
+// Returns the lamp heads (spheres and the few real point lights): the time
+// of day switch turns them on at dusk. Only every sixteenth lamp gets a real
+// point light: 80 lights would stall the frame.
+function buildStreetProps(group, rand, streetCoords) {
   const lampHeads = [];
   const lampMat = lambert(0x3a3f4a);
   const lampGlowMat = new THREE.MeshBasicMaterial({ color: PALETTE.lamp });
@@ -186,7 +298,6 @@ export function buildCity(scene, rand) {
         head.position.set(x, 5.6, z);
         group.add(head);
         lampHeads.push(head);
-        // Only every sixth lamp gets a real point light: 80 lights would stall the frame.
         lampCount += 1;
         if (lampCount % 16 === 0) {
           const light = new THREE.PointLight(0xffd9a0, 0, 26, 1.6);
@@ -214,8 +325,11 @@ export function buildCity(scene, rand) {
     else { bench.position.set(street + 9.5, 0.45, along); bench.rotation.y = Math.PI / 2; }
     group.add(bench);
   }
+  return lampHeads;
+}
 
-  // --- Pickups: ammo crates, health kits, armour vests ------------------------
+// --- Pickups: ammo crates, health kits, armour vests ------------------------------
+function buildPickups(group, rand, pickups, streetCoords) {
   const pickupDefs = [
     { kind: 'ammo', color: 0xffc93c, label: 'AMMO' },
     { kind: 'health', color: 0x37d67a, label: 'HEALTH' },
@@ -242,39 +356,47 @@ export function buildCity(scene, rand) {
     group.add(mesh);
     pickups.push({ mesh, kind: def.kind, x, z, taken: false, bob: rand() * 6 });
   }
+}
 
-  // --- Mission beacon ----------------------------------------------------------
-  const beacon = new THREE.Group();
+// --- Mission beacon -----------------------------------------------------------------
+// A light beam and a spinning ground ring marking the current objective.
+// Hidden until a mission sets its position.
+function buildBeacon(scene) {
+  const group = new THREE.Group();
   const beam = new THREE.Mesh(
     new THREE.CylinderGeometry(1.6, 1.6, 60, 12, 1, true),
     new THREE.MeshBasicMaterial({ color: 0xffd23e, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false }),
   );
   beam.position.y = 30;
-  beacon.add(beam);
-  const beaconRing = new THREE.Mesh(
+  group.add(beam);
+  const ring = new THREE.Mesh(
     new THREE.TorusGeometry(2.4, 0.18, 8, 24),
     new THREE.MeshBasicMaterial({ color: 0xffd23e }),
   );
-  beaconRing.rotation.x = Math.PI / 2;
-  beaconRing.position.y = 0.3;
-  beacon.add(beaconRing);
-  beacon.visible = false;
-  scene.add(beacon);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.3;
+  group.add(ring);
+  group.visible = false;
+  scene.add(group);
+  return { group, beam, ring };
+}
 
-  // --- Particles: one pool of small boxes, reused for sparks / smoke / muzzle --
-  const particlePool = [];
-  const particleGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
+// --- Particles ----------------------------------------------------------------------
+// One pool of small boxes, reused for sparks / smoke / muzzle flashes / blood.
+function buildParticles(scene, rand) {
+  const pool = [];
+  const geo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
   for (let i = 0; i < 90; i += 1) {
-    const m = new THREE.Mesh(particleGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
     m.visible = false;
     scene.add(m);
-    particlePool.push({ mesh: m, vel: new THREE.Vector3(), life: 0, maxLife: 1, gravity: 0 });
+    pool.push({ mesh: m, vel: new THREE.Vector3(), life: 0, maxLife: 1, gravity: 0 });
   }
-  let particleCursor = 0;
-  function spawnParticles(x, y, z, color, count, speed, life, gravity) {
+  let cursor = 0;
+  function spawn(x, y, z, color, count, speed, life, gravity) {
     for (let i = 0; i < count; i += 1) {
-      const p = particlePool[particleCursor];
-      particleCursor = (particleCursor + 1) % particlePool.length;
+      const p = pool[cursor];
+      cursor = (cursor + 1) % pool.length;
       p.mesh.visible = true;
       p.mesh.material.color.setHex(color);
       p.mesh.position.set(x, y, z);
@@ -284,55 +406,8 @@ export function buildCity(scene, rand) {
       p.gravity = gravity;
     }
   }
-
-  // --- Lights and sky ----------------------------------------------------------
-  const sun = new THREE.DirectionalLight(0xffb36b, 1.6);
-  sun.position.set(80, 60, -40);
-  scene.add(sun);
-  const hemi = new THREE.HemisphereLight(0x9db8dd, 0x3a2f28, 0.7);
-  scene.add(hemi);
-  scene.fog = new THREE.Fog(0x2a1e33, 120, 420);
-
-  function setTimeOfDay(hours) {
-    // hours 0..24; sunset ~18.5, night after 20. Sun elevation follows a sine.
-    const t = ((hours - 6) / 12) * Math.PI; // 6h sunrise, 18h sunset
-    const elev = Math.sin(t);
-    const day = Math.max(0, Math.min(1, elev * 1.6 + 0.25));
-    const dusk = Math.max(0, 1 - Math.abs(elev) * 3) * (hours > 12 ? 1 : 0.4);
-    const sky = new THREE.Color(PALETTE.skyDay).lerp(new THREE.Color(PALETTE.skyNight), 1 - day);
-    sky.lerp(new THREE.Color(PALETTE.skyDusk), dusk * 0.7);
-    scene.background = sky;
-    scene.fog.color.copy(sky);
-    sun.intensity = 1.35 + day * 2.0;
-    sun.color.setHex(dusk > 0.4 ? 0xff8c4a : 0xfff2d0);
-    sun.position.set(Math.cos(t) * 120, Math.max(12, elev * 120 + 20), -60);
-    hemi.intensity = 0.9 + day * 0.6;
-    const lampOn = day < 0.45;
-    for (const head of lampHeads) {
-      if (head.isPointLight) head.intensity = lampOn ? 14 : 0;
-      else head.material.color.setHex(lampOn ? PALETTE.lamp : 0x555a66);
-    }
-  }
-
-  function isBlocked(x, z, r) {
-    if (Math.abs(x) > HALF + 20 || Math.abs(z) > HALF + 55) return true;
-    for (const c of colliders) {
-      if (c.low) continue;
-      if (x + r > c.minX && x - r < c.maxX && z + r > c.minZ && z - r < c.maxZ) return true;
-    }
-    return false;
-  }
-
-  function update(dt, time, hours) {
-    setTimeOfDay(hours);
-    beaconRing.rotation.z += dt * 1.5;
-    beam.material.opacity = 0.2 + Math.sin(time * 3) * 0.08;
-    for (const p of pickups) {
-      if (p.taken) continue;
-      p.mesh.children[0].position.y = 0.9 + Math.sin(time * 2 + p.bob) * 0.25;
-      p.mesh.children[0].rotation.y += dt * 1.5;
-    }
-    for (const p of particlePool) {
+  function update(dt) {
+    for (const p of pool) {
       if (p.life <= 0) continue;
       p.life -= dt;
       if (p.life <= 0) { p.mesh.visible = false; continue; }
@@ -341,44 +416,17 @@ export function buildCity(scene, rand) {
       const s = Math.max(0.1, p.life / p.maxLife);
       p.mesh.scale.setScalar(s);
     }
-    water.position.y = -0.2 + Math.sin(time * 0.8) * 0.08;
   }
-
-  // Street points for traffic / pedestrian spawns.
-  for (const c of streetCoords) {
-    for (let d = -HALF + 10; d < HALF - 8; d += 24) {
-      streetPoints.push({ x: c, z: d, alongZ: true });
-      streetPoints.push({ x: d, z: c, alongZ: false });
-    }
-  }
-
-  return {
-    colliders, pickups, streetPoints, beacon, streetCoords,
-    isBlocked, update, setTimeOfDay, spawnParticles,
-    sparks(x, y, z) { spawnParticles(x, y, z, 0xffc93c, 12, 9, 0.6, 12); },
-    smoke(x, y, z) { spawnParticles(x, y, z, 0x555555, 6, 3, 1.4, -1.5); },
-    muzzle(x, y, z) { spawnParticles(x, y, z, 0xffe27a, 6, 6, 0.12, 0); },
-    blood(x, y, z) { spawnParticles(x, y, z, 0xc0392b, 10, 7, 0.5, 14); },
-  };
+  return { spawn, update };
 }
 
-function makePalm(rand) {
-  const g = new THREE.Group();
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.18, 0.3, range(rand, 4, 6.5), 6),
-    lambert(PALETTE.trunk),
-  );
-  trunk.position.y = trunk.geometry.parameters.height / 2;
-  trunk.rotation.z = (rand() - 0.5) * 0.2;
-  g.add(trunk);
-  const topY = trunk.geometry.parameters.height;
-  for (let i = 0; i < 6; i += 1) {
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.7), lambert(PALETTE.leaf));
-    const a = (i / 6) * Math.PI * 2;
-    leaf.position.set(Math.cos(a) * 1.1, topY + 0.2, Math.sin(a) * 1.1);
-    leaf.rotation.y = -a;
-    leaf.rotation.z = 0.5;
-    g.add(leaf);
-  }
-  return g;
+// --- Lights and sky -------------------------------------------------------------------
+function buildLights(scene) {
+  const sun = new THREE.DirectionalLight(0xffb36b, 1.6);
+  sun.position.set(80, 60, -40);
+  scene.add(sun);
+  const hemi = new THREE.HemisphereLight(0x9db8dd, 0x3a2f28, 0.7);
+  scene.add(hemi);
+  scene.fog = new THREE.Fog(0x2a1e33, 120, 420);
+  return { sun, hemi };
 }
