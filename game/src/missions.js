@@ -11,6 +11,16 @@ export const STORY_INTRO =
   'ending with the vault of the Coral Bay Bank — and Sheriff Dray Cole, the crooked ' +
   'lawman who put Marlo away, standing in the way. Drive fast, stay low, get paid.';
 
+// True when the player is within `radius` of a point.
+function near(state, x, z, radius) {
+  return distance2D(state.player.x, state.player.z, x, z) < radius;
+}
+
+// True when the player is driving the named car model near a point.
+function inCarNear(state, name, x, z, radius) {
+  return state.car && state.car.type.name === name && near(state, x, z, radius);
+}
+
 const MISSIONS = [
   {
     id: 1,
@@ -23,7 +33,7 @@ const MISSIONS = [
       ['Marina Sol', 'Six jobs, one vault, and Dray Cole breathing down our necks. First: wheels. The Coral Cruiser parked by the marina is ours tonight.'],
     ],
     reward: MISSION_REWARDS[0],
-    check(state) { return distance2D(state.player.x, state.player.z, -48, 132) < 6; },
+    check(state) { return near(state, -48, 132, 6); },
   },
   {
     id: 2,
@@ -36,10 +46,7 @@ const MISSIONS = [
     ],
     reward: MISSION_REWARDS[1],
     needsCar: 'Coral Cruiser',
-    check(state) {
-      return state.car && state.car.type.name === 'Coral Cruiser' &&
-        distance2D(state.player.x, state.player.z, 56, -48) < 30;
-    },
+    check(state) { return inCarNear(state, 'Coral Cruiser', 56, -48, 30); },
   },
   {
     id: 3,
@@ -52,10 +59,7 @@ const MISSIONS = [
     ],
     reward: MISSION_REWARDS[2],
     spawnWanted: 2,
-    check(state) {
-      return state.wanted === 0 &&
-        distance2D(state.player.x, state.player.z, -96, -48) < 12;
-    },
+    check(state) { return state.wanted === 0 && near(state, -96, -48, 12); },
   },
   {
     id: 4,
@@ -70,8 +74,7 @@ const MISSIONS = [
     enforcers: 3,
     enforcerAt: { x: 96, z: 90 },
     check(state) {
-      return state.car && distance2D(state.player.x, state.player.z, 96, 96) < 10 &&
-        state.enforcersLeft === 0;
+      return state.car && near(state, 96, 96, 10) && state.enforcersLeft === 0;
     },
   },
   {
@@ -88,8 +91,7 @@ const MISSIONS = [
     enforcers: 2,
     enforcerAt: { x: 0, z: -44 },
     check(state) {
-      return distance2D(state.player.x, state.player.z, 0, -48) < 8 &&
-        state.enforcersLeft === 0;
+      return near(state, 0, -48, 8) && state.enforcersLeft === 0;
     },
   },
   {
@@ -103,9 +105,7 @@ const MISSIONS = [
     ],
     reward: MISSION_REWARDS[5],
     spawnWanted: 4,
-    check(state) {
-      return distance2D(state.player.x, state.player.z, -48, 132) < 8;
-    },
+    check(state) { return near(state, -48, 132, 8); },
   },
 ];
 
@@ -117,10 +117,24 @@ export function createMissions() {
   let atTargetTimer = 0;
 
   function current() { return MISSIONS[index] || null; }
-  function start() { started = true; index = 0; lineIndex = 0; done = false; atTargetTimer = 0; }
-  function reset() { start(); }
-  function setIndex(i) { index = Math.max(0, Math.min(MISSIONS.length - 1, i)); lineIndex = 0; atTargetTimer = 0; }
-  // Returns 'complete' | 'failed' | null each frame.
+
+  function restart() {
+    started = true;
+    index = 0;
+    lineIndex = 0;
+    done = false;
+    atTargetTimer = 0;
+  }
+
+  function setIndex(i) {
+    index = Math.max(0, Math.min(MISSIONS.length - 1, i));
+    lineIndex = 0;
+    atTargetTimer = 0;
+  }
+
+  // Returns 'complete' | 'failed' | 'advanced' | null each frame. A mission
+  // only advances after the player holds the target for 0.6 s, so driving
+  // through it at speed does not count.
   function update(dt, state) {
     const m = current();
     if (!m || done) return null;
@@ -139,21 +153,30 @@ export function createMissions() {
     }
     return null;
   }
+
   function nextDialogLine() {
     const m = current();
     if (!m) return null;
     if (lineIndex >= m.dialog.length) return null;
     return m.dialog[lineIndex++];
   }
+
   function dialogLeft() {
     const m = current();
     return m ? m.dialog.length - lineIndex : 0;
   }
+
   return {
     get index() { return index; },
     get started() { return started; },
     get done() { return done; },
     get total() { return MISSIONS.length; },
-    current, start, reset, setIndex, update, nextDialogLine, dialogLeft,
+    current,
+    start: restart,
+    reset: restart,
+    setIndex,
+    update,
+    nextDialogLine,
+    dialogLeft,
   };
 }

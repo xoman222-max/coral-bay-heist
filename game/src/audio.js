@@ -1,7 +1,8 @@
 // All sound is synthesised with WebAudio — no audio files, no network.
-// Engine hum, two-tone siren, gunshot noise, pickup blip, mission jingle and a
-// slow sunset pad loop. Everything is guarded so the game still runs muted or
-// before the first user gesture (AudioContext starts on first interaction).
+// Engine hum, two-tone siren, gunshot noise, pickup blip, mission jingle and
+// a slow sunset pad loop. Everything is guarded so the game still runs muted
+// or before the first user gesture (the AudioContext starts on first
+// interaction, and every sound fails silently instead of throwing).
 export function createAudio() {
   let ctx = null;
   let master = null;
@@ -14,6 +15,7 @@ export function createAudio() {
   let padNodes = null;
   let musicOn = false;
 
+  // Lazily build the context and master gain; false when audio is unavailable.
   function ensure() {
     if (ctx) return true;
     try {
@@ -33,6 +35,7 @@ export function createAudio() {
     if (ensure() && ctx.state === 'suspended') ctx.resume().catch(() => {});
   }
 
+  // One oscillator note with an exponential decay envelope.
   function tone(freq, dur, type, vol, slideTo) {
     if (!ensure() || muted) return;
     try {
@@ -51,6 +54,7 @@ export function createAudio() {
     } catch { /* audio is decoration, never fatal */ }
   }
 
+  // A burst of filtered noise with a decay envelope (shots, crashes, punches).
   function noise(dur, vol, lowFreq) {
     if (!ensure() || muted) return;
     try {
@@ -58,7 +62,9 @@ export function createAudio() {
       const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
       const buf = ctx.createBuffer(1, len, ctx.sampleRate);
       const data = buf.getChannelData(0);
-      for (let i = 0; i < len; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+      for (let i = 0; i < len; i += 1) {
+        data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+      }
       const src = ctx.createBufferSource();
       src.buffer = buf;
       const filter = ctx.createBiquadFilter();
@@ -72,6 +78,13 @@ export function createAudio() {
       g.connect(master);
       src.start(t);
     } catch { /* ignore */ }
+  }
+
+  // A short melody: [frequency, duration, type, volume] notes, evenly spaced.
+  function jingle(notes, gap) {
+    notes.forEach(([freq, dur, type, vol], i) => {
+      setTimeout(() => tone(freq, dur, type, vol), i * gap);
+    });
   }
 
   function startEngine() {
@@ -92,11 +105,11 @@ export function createAudio() {
     } catch { engineOsc = null; }
   }
 
+  // Slow chord pad: detuned triangles through a lowpass, gently swaying.
   function startPad() {
     if (!ensure() || padNodes || musicOn) return;
     musicOn = true;
     try {
-      // Slow chord pad: two detuned triangles through a lowpass, gently swaying.
       const freqs = [110, 164.8, 220, 277.2];
       const g = ctx.createGain();
       g.gain.value = 0.05;
@@ -124,6 +137,27 @@ export function createAudio() {
     } catch { padNodes = null; }
   }
 
+  function siren(on) {
+    if (!ensure()) return;
+    if (on && !sirenOsc) {
+      try {
+        sirenOsc = ctx.createOscillator();
+        sirenOsc.type = 'triangle';
+        sirenOsc.frequency.value = 700;
+        sirenGain = ctx.createGain();
+        sirenGain.gain.value = muted ? 0 : 0.045;
+        sirenOsc.connect(sirenGain);
+        sirenGain.connect(master);
+        sirenOsc.start();
+        sirenTimer = 0;
+      } catch { sirenOsc = null; }
+    } else if (!on && sirenOsc) {
+      try { sirenOsc.stop(); } catch { /* ignore */ }
+      sirenOsc = null;
+      sirenGain = null;
+    }
+  }
+
   return {
     unlock,
     setMuted(value) {
@@ -145,26 +179,7 @@ export function createAudio() {
     crash() { noise(0.35, 0.45, 700); tone(70, 0.25, 'sine', 0.3, 40); },
     pickup() { tone(660, 0.09, 'sine', 0.22); setTimeout(() => tone(990, 0.14, 'sine', 0.22), 80); },
     denied() { tone(180, 0.15, 'square', 0.15, 120); },
-    siren(on) {
-      if (!ensure()) return;
-      if (on && !sirenOsc) {
-        try {
-          sirenOsc = ctx.createOscillator();
-          sirenOsc.type = 'triangle';
-          sirenOsc.frequency.value = 700;
-          sirenGain = ctx.createGain();
-          sirenGain.gain.value = muted ? 0 : 0.045;
-          sirenOsc.connect(sirenGain);
-          sirenGain.connect(master);
-          sirenOsc.start();
-          sirenTimer = 0;
-        } catch { sirenOsc = null; }
-      } else if (!on && sirenOsc) {
-        try { sirenOsc.stop(); } catch { /* ignore */ }
-        sirenOsc = null;
-        sirenGain = null;
-      }
-    },
+    siren,
     updateSiren(dt) {
       if (sirenOsc && !muted) {
         sirenTimer += dt;
@@ -174,10 +189,12 @@ export function createAudio() {
       }
     },
     missionDone() {
-      [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.22, 'triangle', 0.25), i * 110));
+      jingle([[523, 0.22, 'triangle', 0.25], [659, 0.22, 'triangle', 0.25],
+        [784, 0.22, 'triangle', 0.25], [1047, 0.22, 'triangle', 0.25]], 110);
     },
     fail() {
-      [392, 330, 262].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'sawtooth', 0.16), i * 160));
+      jingle([[392, 0.3, 'sawtooth', 0.16], [330, 0.3, 'sawtooth', 0.16],
+        [262, 0.3, 'sawtooth', 0.16]], 160);
     },
     arrest() { tone(220, 0.5, 'sawtooth', 0.2, 110); },
   };
