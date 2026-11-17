@@ -38,7 +38,7 @@ const hud = createHud();
 const input = createInput(canvas);
 
 // --- Three.js setup ------------------------------------------------------------
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 const scene = new THREE.Scene();
@@ -154,6 +154,7 @@ function startNewGame(fromSave) {
   day = save && save.day ? save.day : 1;
   camYaw = Math.PI;
   if (save) missions.setIndex(save.missionIndex || 0);
+  ensureMissionCruiser();
   const m = missions.current();
   applyMissionSetup(m);
   hud.show(true);
@@ -200,6 +201,21 @@ function endGame(kind, reason) {
   announce(reason);
 }
 
+// The red Coral Cruiser for mission 2 is always parked by the marina: the
+// job is impossible without it, so it is (re)spawned whenever it is missing.
+function ensureMissionCruiser() {
+  const existing = traffic.cars.find((c) => c.type.name === 'Coral Cruiser' && !c.wrecked &&
+    Math.hypot(c.x - 56, c.z + 48) < 10);
+  if (existing) return;
+  const type = CAR_TYPES.find((t) => t.name === 'Coral Cruiser');
+  const v = createVehicle(type, 56, -48, Math.PI / 2, city, audio);
+  v.state.npc = true;
+  v.state.parked = true;
+  v.state.cruiseSpeed = 0;
+  scene.add(v.state.mesh);
+  traffic.cars.push(v.state);
+}
+
 function retryMission() {
   police.clearAll();
   player.health = PLAYER.maxHealth;
@@ -210,6 +226,7 @@ function retryMission() {
   player.z = missions.current() ? missions.current().target.z + 12 : 20;
   player.heading = Math.PI;
   enforcersLeft = 0;
+  ensureMissionCruiser();
   applyMissionSetup(missions.current());
   hud.show(true);
   screen = 'play';
@@ -424,11 +441,11 @@ function tryShoot() {
     if (!car.wrecked && !car.parked) consider(car.x, car.z, 1.0, { kind: 'car', car });
   }
   if (!bestTarget) {
-    // Tracer into the distance.
+    // Tracer into the distance; a gunshot in public still draws the police.
     const tx = camera.position.x + dir.x * 40;
     const tz = camera.position.z + dir.z * 40;
     city.sparks(tx, Math.max(0.5, camera.position.y + dir.y * 40), tz);
-    commitCrime(0);
+    commitCrime(WANTED.shoot);
     return;
   }
   if (bestTarget.kind === 'ped') {
@@ -609,7 +626,7 @@ function updateEnforcers(dt) {
         damagePlayer(7 + Math.floor(Math.random() * 6), 'A Bay Sharks enforcer shot you.');
       }
     }
-    // Enforcers close in on foot.
+    // Enforcers close in on foot, sliding along walls.
     if (d > 8 && d < 60) {
       const want = Math.atan2(player.x - ped.x, player.z - ped.z);
       ped.heading = want;
@@ -617,6 +634,9 @@ function updateEnforcers(dt) {
       const nx = ped.x + Math.sin(want) * step;
       const nz = ped.z + Math.cos(want) * step;
       if (!city.isBlocked(nx, nz, 0.5)) { ped.x = nx; ped.z = nz; }
+      else if (!city.isBlocked(nx, ped.z, 0.5)) ped.x = nx;
+      else if (!city.isBlocked(ped.x, nz, 0.5)) ped.z = nz;
+      else ped.heading += Math.PI / 2;
     }
   }
 }
@@ -641,17 +661,18 @@ function updateCamera(dt) {
   let height = 3.4;
   let lookY = 1.6;
   if (player.inCar) {
-    dist = 11;
-    height = 4.2;
+    dist = 12;
+    height = 3.2;
     lookY = 1.4;
-    targetYaw = player.inCar.heading + Math.PI;
+    targetYaw = player.inCar.heading; // camera sits behind the car, looking its way
   }
   // Smooth the yaw toward the target (shortest way round).
   let diff = angleDiff(camYaw, targetYaw);
   camYaw += diff * (1 - Math.exp(-6 * dt));
-  const cx = player.x - Math.sin(camYaw) * dist * Math.cos(camPitch) + 0;
-  const cz = player.z - Math.cos(camYaw) * dist * Math.cos(camPitch);
-  const cy = height + Math.sin(camPitch) * dist;
+  const pitch = player.inCar ? camPitch * 0.45 : camPitch;
+  const cx = player.x - Math.sin(camYaw) * dist * Math.cos(pitch);
+  const cz = player.z - Math.cos(camYaw) * dist * Math.cos(pitch);
+  const cy = height + Math.sin(pitch) * dist;
   camera.position.x += (cx - camera.position.x) * (1 - Math.exp(-10 * dt));
   camera.position.y += (cy - camera.position.y) * (1 - Math.exp(-10 * dt));
   camera.position.z += (cz - camera.position.z) * (1 - Math.exp(-10 * dt));
@@ -799,6 +820,8 @@ for (const car of traffic.cars) {
   };
 }
 
+ensureMissionCruiser();
+
 // --- Screenshot staging API ------------------------------------------------------
 const api = {
   startNewGame() { startNewGame(false); screen = 'play'; screenEl.style.display = 'none'; hud.show(true); },
@@ -820,6 +843,8 @@ const api = {
     player.x = x; player.z = z; player.heading = heading;
     v.state.npc = false;
     v.state.parked = false;
+    v.state.stolen = true; // keep the traffic system from driving the player's car
+    v.state.cruiseSpeed = 0;
   },
   placePlayerOnFoot(x, z, heading) {
     if (player.inCar) player.inCar = null;
@@ -829,12 +854,32 @@ const api = {
     playerMesh.rotation.y = heading;
   },
   setWanted(n) { police.wanted = n; },
+  police() {
+    return {
+      cars: police.cars.map((c) => ({ x: Math.round(c.x), z: Math.round(c.z), wrecked: c.wrecked })),
+      cops: police.cops.map((c) => ({ x: Math.round(c.x), z: Math.round(c.z), arrest: Math.round(c.arrest * 10) / 10 })),
+    };
+  },
   spawnPoliceNearPlayer() {
-    for (let i = 0; i < 2; i += 1) {
-      const car = police.cars[i];
-      if (car) { car.x = player.x + 18 + i * 12; car.z = player.z - 10 - i * 6; }
-    }
     police.update(0.01, player, player.inCar, null, null);
+    // Stage the chase in frame: one interceptor ahead-left, one closing in behind.
+    const fx = Math.sin(player.heading);
+    const fz = Math.cos(player.heading);
+    const rx = Math.cos(player.heading);
+    const rz = -Math.sin(player.heading);
+    const spots = [
+      { x: player.x + fx * 30 + rx * 2, z: player.z + fz * 30 + rz * 2 },
+      { x: player.x - fx * 24 + rx * 7, z: player.z - fz * 24 + rz * 7 },
+    ];
+    police.cars.forEach((car, i) => {
+      const spot = spots[i % spots.length];
+      car.x = spot.x;
+      car.z = spot.z;
+      car.heading = player.heading;
+      car.speed = 20;
+      car.mesh.position.set(car.x, 0, car.z);
+      car.mesh.rotation.y = car.heading;
+    });
   },
   setMission(i) { startMissionIndex(i); },
   giveAmmo(n) { player.ammo = n; },
@@ -855,13 +900,16 @@ function runShot(name) {
   function paint() {
     if (kind === 'play') {
       // Drive the staged scene forward a touch so traffic and the camera settle.
-      for (let i = 0; i < 30; i += 1) {
+      // Fewer steps for the chase so the trailing interceptor stays behind the camera.
+      const steps = name === 'chase' ? 12 : 30;
+      for (let i = 0; i < steps; i += 1) {
         traffic.update(STEP, player, player.inCar);
         peds.update(STEP, player, player.inCar);
-        if (player.inCar && name === 'drive') {
-          player.inCar.speed = 22;
-          const nx = player.inCar.x + Math.sin(player.inCar.heading) * 22 * STEP;
-          const nz = player.inCar.z + Math.cos(player.inCar.heading) * 22 * STEP;
+        if (player.inCar) {
+          const cruise = name === 'chase' ? 26 : 22;
+          player.inCar.speed = cruise;
+          const nx = player.inCar.x + Math.sin(player.inCar.heading) * cruise * STEP;
+          const nz = player.inCar.z + Math.cos(player.inCar.heading) * cruise * STEP;
           if (!city.isBlocked(nx, nz, 1.6)) { player.inCar.x = nx; player.inCar.z = nz; }
           player.inCar.mesh.position.set(player.inCar.x, 0, player.inCar.z);
           player.x = player.inCar.x; player.z = player.inCar.z;
@@ -892,6 +940,12 @@ function runShot(name) {
     else {
       window.__shotReady = true;
       statusEl.textContent = 'SHOT_READY ' + name;
+      // Keep re-painting the staged scene: a later resize clears a WebGL
+      // canvas, and the screenshot must still find the frame there.
+      (function keepPainting() {
+        renderFrame();
+        requestAnimationFrame(keepPainting);
+      })();
     }
   }
   requestAnimationFrame(paint);
@@ -932,12 +986,48 @@ function runGame() {
     if (guard >= 8) accumulator = 0;
     renderer.render(scene, camera);
   }
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === 'play') { writeSave(); showPause(); }
-  });
   announce('Coral Bay Heist. Press New Game to start.');
   requestAnimationFrame(frame);
 }
+
+// Debug handle for headless testing: exposes live state without changing the game.
+window.__cbh = {
+  get player() { return { x: player.x, z: player.z, heading: player.heading, inCar: !!player.inCar, speed: player.inCar ? player.inCar.speed : 0 }; },
+  get car() { const c = player.inCar; return c ? { x: c.x, z: c.z, heading: c.heading, speed: c.speed, meshX: c.mesh.position.x, meshZ: c.mesh.position.z } : null; },
+  get camera() { return { x: camera.position.x, y: camera.position.y, z: camera.position.z }; },
+  get hours() { return hours; },
+  get sceneChildren() { return scene.children.length; },
+  get state() {
+    return {
+      screen, mission: missions.index, missionTitle: missions.current() ? missions.current().title : 'done',
+      wanted: police.wanted, health: Math.round(player.health), cash: player.cash,
+      ammo: player.ammo, inCar: !!player.inCar, carName: player.inCar ? player.inCar.type.name : null,
+      x: Math.round(player.x * 10) / 10, z: Math.round(player.z * 10) / 10,
+      enforcersLeft,
+    };
+  },
+  nearbyCars() {
+    return traffic.cars
+      .filter((c) => Math.hypot(c.x - player.x, c.z - player.z) < 25)
+      .map((c) => ({ name: c.type.name, x: Math.round(c.x), z: Math.round(c.z), parked: c.parked, wrecked: !!c.wrecked, stolen: !!c.stolen }));
+  },
+  setWanted(n) { police.wanted = n; },
+  police() {
+    return {
+      cars: police.cars.map((c) => ({ x: Math.round(c.x), z: Math.round(c.z), wrecked: c.wrecked })),
+      cops: police.cops.map((c) => ({ x: Math.round(c.x), z: Math.round(c.z), arrest: Math.round(c.arrest * 10) / 10 })),
+    };
+  },
+  teleport(x, z) { player.x = x; player.z = z; if (player.inCar) { player.inCar.x = x; player.inCar.z = z; player.inCar.mesh.position.set(x, 0, z); } },
+  get renderer() { return renderer; },
+  get scene() { return scene; },
+  get cam() { return camera; },
+  get canvasPixels() {
+    const c = renderer.domElement;
+    const gl = renderer.getContext();
+    return { w: c.width, h: c.height, contextLost: gl.isContextLost() };
+  },
+};
 
 if (shotName) runShot(shotName);
 else runGame();

@@ -17,6 +17,7 @@ export function buildCity(scene, rand) {
   const colliders = [];   // { minX, maxX, minZ, maxZ }
   const pickups = [];     // { mesh, kind, x, z, taken, bob }
   const streetPoints = [];
+  const dummy = new THREE.Object3D(); // scratch transform for instanced meshes
   const group = new THREE.Group();
   scene.add(group);
 
@@ -29,6 +30,7 @@ export function buildCity(scene, rand) {
   ground.position.set(0, -0.05, 40);
   group.add(ground);
 
+  const dashSpots = [];
   const roadMat = lambert(PALETTE.road);
   const walkMat = lambert(PALETTE.sidewalk);
   const streetCoords = [];
@@ -41,14 +43,10 @@ export function buildCity(scene, rand) {
       if (horizontal) road.position.set(0, 0, c);
       else { road.rotation.z = Math.PI / 2; road.position.set(c, 0, 0); }
       group.add(road);
-      // Dashed centre line.
-      const dashMat = lambert(0xf5d76e);
+      // Dashed centre line (collected, instanced below).
       for (let d = -HALF + 6; d < HALF - 6; d += 12) {
-        const dash = new THREE.Mesh(new THREE.PlaneGeometry(4, 0.5), dashMat);
-        dash.rotation.x = -Math.PI / 2;
-        if (horizontal) dash.position.set(d, 0.02, c);
-        else { dash.rotation.z = Math.PI / 2; dash.position.set(c, 0.02, d); }
-        group.add(dash);
+        if (horizontal) dashSpots.push([d, c, 0]);
+        else dashSpots.push([c, d, Math.PI / 2]);
       }
     }
     // Sidewalk strips flanking each street.
@@ -62,6 +60,18 @@ export function buildCity(scene, rand) {
       }
     }
   }
+
+  // Flush the centre-line dashes into one instanced draw.
+  const dashGeo = new THREE.PlaneGeometry(4, 0.5);
+  const dashInst = new THREE.InstancedMesh(dashGeo, lambert(0xf5d76e), Math.max(1, dashSpots.length));
+  dashSpots.forEach(([x, z, rot], i) => {
+    dummy.position.set(x, 0.02, z);
+    dummy.rotation.set(-Math.PI / 2, 0, rot);
+    dummy.updateMatrix();
+    dashInst.setMatrixAt(i, dummy.matrix);
+  });
+  dashInst.instanceMatrix.needsUpdate = true;
+  group.add(dashInst);
 
   // Beach strip and bay water to the south (positive z).
   const sand = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 220, 26), lambert(PALETTE.sand));
@@ -89,8 +99,18 @@ export function buildCity(scene, rand) {
   }
 
   // --- Buildings --------------------------------------------------------------
+  // Windows are InstancedMeshes (one for lit, one for dark): 2500 separate
+  // window meshes would cost hundreds of draw calls; two instanced draws do it.
   const windowLitMat = new THREE.MeshBasicMaterial({ color: PALETTE.windowLit });
   const windowDarkMat = new THREE.MeshBasicMaterial({ color: PALETTE.windowDark });
+  const litWindows = [];
+  const darkWindows = [];
+  function addWindow(x, y, z, rotY) {
+    dummy.position.set(x, y, z);
+    dummy.rotation.set(0, rotY, 0);
+    dummy.updateMatrix();
+    (rand() < 0.45 ? litWindows : darkWindows).push(dummy.matrix.clone());
+  }
   const buildings = new THREE.Group();
   group.add(buildings);
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -112,18 +132,16 @@ export function buildCity(scene, rand) {
         const rim = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.5, d + 0.6), lambert(0x2e3440));
         rim.position.set(cx + ox, h + 0.25, cz + oz);
         buildings.add(rim);
-        // Lit / dark windows as a cheap texture-free grid on the street faces.
+        // Lit / dark windows on all four faces, as instanced quads.
         const floors = Math.max(2, Math.floor(h / 4));
         for (let f = 0; f < floors; f += 1) {
-          for (let k = 0; k < 3; k += 1) {
-            const lit = rand() < 0.45;
-            const win = new THREE.Mesh(
-              new THREE.PlaneGeometry(1.6, 1.8),
-              lit ? windowLitMat : windowDarkMat,
-            );
-            const wx = cx + ox - w / 2 + 2.5 + k * (w - 5) / 2;
-            win.position.set(wx, 2.5 + f * 4, cz + oz + d / 2 + 0.06);
-            buildings.add(win);
+          for (let k = 0; k < 2; k += 1) {
+            const wx = cx + ox - w / 2 + 3 + k * (w - 6);
+            const wz = cz + oz - d / 2 + 3 + k * (d - 6);
+            addWindow(wx, 2.5 + f * 4, cz + oz + d / 2 + 0.06, 0);
+            addWindow(wx, 2.5 + f * 4, cz + oz - d / 2 - 0.06, Math.PI);
+            addWindow(cx + ox + w / 2 + 0.06, 2.5 + f * 4, wz, Math.PI / 2);
+            addWindow(cx + ox - w / 2 - 0.06, 2.5 + f * 4, wz, -Math.PI / 2);
           }
         }
         colliders.push({
@@ -136,6 +154,15 @@ export function buildCity(scene, rand) {
       palm.position.set(cx + range(rand, -3, 3), 0, cz + range(rand, -3, 3));
       group.add(palm);
     }
+  }
+
+  // Flush the collected windows into two instanced draws.
+  const winGeo = new THREE.PlaneGeometry(1.6, 1.8);
+  for (const [list, mat] of [[litWindows, windowLitMat], [darkWindows, windowDarkMat]]) {
+    const inst = new THREE.InstancedMesh(winGeo, mat, Math.max(1, list.length));
+    list.forEach((m, i) => inst.setMatrixAt(i, m));
+    inst.instanceMatrix.needsUpdate = true;
+    buildings.add(inst);
   }
 
   // --- Street lamps, palms along the roads, benches ----------------------------
@@ -155,7 +182,7 @@ export function buildCity(scene, rand) {
         lampHeads.push(head);
         // Only every sixth lamp gets a real point light: 80 lights would stall the frame.
         lampCount += 1;
-        if (lampCount % 6 === 0) {
+        if (lampCount % 16 === 0) {
           const light = new THREE.PointLight(0xffd9a0, 0, 26, 1.6);
           light.position.set(x, 5.4, z);
           group.add(light);
@@ -164,7 +191,7 @@ export function buildCity(scene, rand) {
       }
     }
   }
-  for (let i = 0; i < 26; i += 1) {
+  for (let i = 0; i < 14; i += 1) {
     const palm = makePalm(rand);
     const along = range(rand, -HALF + 8, HALF - 8);
     const street = pick(rand, streetCoords);
@@ -270,10 +297,10 @@ export function buildCity(scene, rand) {
     sky.lerp(new THREE.Color(PALETTE.skyDusk), dusk * 0.7);
     scene.background = sky;
     scene.fog.color.copy(sky);
-    sun.intensity = 0.25 + day * 1.5;
+    sun.intensity = 1.35 + day * 2.0;
     sun.color.setHex(dusk > 0.4 ? 0xff8c4a : 0xfff2d0);
     sun.position.set(Math.cos(t) * 120, Math.max(12, elev * 120 + 20), -60);
-    hemi.intensity = 0.3 + day * 0.5;
+    hemi.intensity = 0.9 + day * 0.6;
     const lampOn = day < 0.45;
     for (const head of lampHeads) {
       if (head.isPointLight) head.intensity = lampOn ? 14 : 0;

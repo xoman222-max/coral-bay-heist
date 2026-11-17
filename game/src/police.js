@@ -3,7 +3,7 @@
 // Wanted stars fall again after the player stays out of sight for a while.
 import * as THREE from 'three';
 import { POLICE, WANTED } from './config.js';
-import { clamp, distance2D, range } from './random.js';
+import { angleDiff, clamp, distance2D, range } from './random.js';
 import { createCarMesh } from './vehicles.js';
 import { createPedMesh } from './pedestrians.js';
 
@@ -23,6 +23,18 @@ export function createPolice(scene, city, rand, audio) {
     return wanted;
   }
 
+  // Pick a spawn point near (x, z) that is not inside a building: a cop or
+  // cruiser spawned inside a wall can never reach the player.
+  function freeSpotNear(x, z, dist) {
+    for (let k = 0; k < 10; k += 1) {
+      const a = rand() * Math.PI * 2;
+      const sx = clamp(x + Math.sin(a) * dist, -110, 110);
+      const sz = clamp(z + Math.cos(a) * dist, -110, 110);
+      if (!city.isBlocked(sx, sz, 1.5)) return { x: sx, z: sz };
+    }
+    return { x: clamp(x, -110, 110), z: clamp(z, -110, 110) };
+  }
+
   function spawnCarNear(x, z) {
     const type = POLICE_TYPE;
     const mesh = createCarMesh(type, 0xf8f9fa);
@@ -35,10 +47,10 @@ export function createPolice(scene, city, rand, audio) {
       new THREE.MeshBasicMaterial({ color: 0xff2222 }));
     bar.position.set(0, 1.62, 0);
     mesh.add(bar);
-    // Spawn on a street 40-60 units away, facing the player.
-    const a = rand() * Math.PI * 2;
-    const sx = clamp(x + Math.sin(a) * 50, -110, 110);
-    const sz = clamp(z + Math.cos(a) * 50, -110, 110);
+    // Spawn on open ground 32 units away, facing the player.
+    const spot = freeSpotNear(x, z, 32);
+    const sx = spot.x;
+    const sz = spot.z;
     const heading = Math.atan2(x - sx, z - sz);
     mesh.position.set(sx, 0, sz);
     mesh.rotation.y = heading;
@@ -54,9 +66,9 @@ export function createPolice(scene, city, rand, audio) {
   function spawnFootCop(x, z) {
     const mesh = createPedMesh(0x1b2a4a, 0xe0ac69, 1.05);
     mesh.children[1].material = new THREE.MeshLambertMaterial({ color: 0x14213d });
-    const a = rand() * Math.PI * 2;
-    const sx = clamp(x + Math.sin(a) * 30, -110, 110);
-    const sz = clamp(z + Math.cos(a) * 30, -110, 110);
+    const spot = freeSpotNear(x, z, 30);
+    const sx = spot.x;
+    const sz = spot.z;
     mesh.position.set(sx, 0, sz);
     scene.add(mesh);
     const cop = { mesh, x: sx, z: sz, heading: 0, speed: 5.2, arrest: 0 };
@@ -130,10 +142,17 @@ export function createPolice(scene, city, rand, audio) {
       }
       if (d > 1.2 && !playerCar) {
         const want = Math.atan2(px - cop.x, pz - cop.z);
-        cop.heading = want;
-        const nx = cop.x + Math.sin(want) * cop.speed * dt;
-        const nz = cop.z + Math.cos(want) * cop.speed * dt;
+        // Turn toward the player gradually: a deflection from a wall must
+        // survive into the next frame instead of being overwritten.
+        cop.heading += clamp(angleDiff(cop.heading, want), -3.5 * dt, 3.5 * dt);
+        const step = cop.speed * dt;
+        const nx = cop.x + Math.sin(cop.heading) * step;
+        const nz = cop.z + Math.cos(cop.heading) * step;
+        // Slide along walls instead of getting stuck on them.
         if (!city.isBlocked(nx, nz, 0.5)) { cop.x = nx; cop.z = nz; }
+        else if (!city.isBlocked(nx, cop.z, 0.5)) cop.x = nx;
+        else if (!city.isBlocked(cop.x, nz, 0.5)) cop.z = nz;
+        else cop.heading += Math.PI / 2;
       }
       cop.mesh.position.set(cop.x, 0, cop.z);
       cop.mesh.rotation.y = cop.heading;

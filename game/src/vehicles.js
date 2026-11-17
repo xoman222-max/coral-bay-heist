@@ -171,7 +171,7 @@ export function createTraffic(scene, city, rand, audio) {
 
   function update(dt, playerPos, playerCar) {
     for (const car of cars) {
-      if (car.wrecked || car.parked || car.stolen) continue;
+      if (car.wrecked || car.parked || car.stolen || car.cruiseSpeed === undefined) continue;
       // Slow down if something is right ahead.
       let ahead = 0;
       const fx = Math.sin(car.heading);

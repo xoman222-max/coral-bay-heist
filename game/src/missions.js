@@ -28,7 +28,7 @@ const MISSIONS = [
   {
     id: 2,
     title: '2 — Borrowed Wheels',
-    target: { x: 56, z: -40, label: 'Coral Cruiser' },
+    target: { x: 56, z: -48, label: 'Coral Cruiser' },
     objective: 'Steal the red Coral Cruiser parked by the marina (press E near a car).',
     dialog: [
       ['Marina Sol', 'That Cruiser belongs to a Shark who owes me money. Take it. If the driver argues, argue back.'],
@@ -38,14 +38,14 @@ const MISSIONS = [
     needsCar: 'Coral Cruiser',
     check(state) {
       return state.car && state.car.type.name === 'Coral Cruiser' &&
-        distance2D(state.player.x, state.player.z, 56, -40) < 30;
+        distance2D(state.player.x, state.player.z, 56, -48) < 30;
     },
   },
   {
     id: 3,
     title: '3 — Shake the Heat',
-    target: { x: -96, z: -96, label: 'Hideout alley' },
-    objective: 'Lose the police, then reach the hideout alley in the north-west corner.',
+    target: { x: -96, z: -48, label: 'Hideout alley' },
+    objective: 'Lose the police, then reach the hideout at the north-west crossroads.',
     dialog: [
       ['Marina Sol', 'Cole’s boys are on you already. Lose them — lay low, break line of sight, let the stars cool off.'],
       ['Marlo Vane', 'I have not even had the car an hour and the whole city is after me. Feels like old times.'],
@@ -54,7 +54,7 @@ const MISSIONS = [
     spawnWanted: 2,
     check(state) {
       return state.wanted === 0 &&
-        distance2D(state.player.x, state.player.z, -96, -96) < 12;
+        distance2D(state.player.x, state.player.z, -96, -48) < 12;
     },
   },
   {

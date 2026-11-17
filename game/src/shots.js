@@ -7,8 +7,7 @@ export function stageShot(name, api) {
   if (name === 'drive') {
     api.startNewGame();
     api.placePlayerInCar('Coral Cruiser', 0, 40, Math.PI);
-    api.setCameraBehindCar();
-    api.setTime(18.2);
+    api.setTime(17.0);
     return 'play';
   }
   if (name === 'chase') {
@@ -23,10 +22,10 @@ export function stageShot(name, api) {
   if (name === 'mission') {
     api.startNewGame();
     api.setMission(3); // 0-based: mission 4, The Drop, with enforcers at the warehouse
-    api.placePlayerOnFoot(80, 78, Math.PI * 0.85);
+    api.placePlayerOnFoot(96, 66, 0);
     api.giveAmmo(48);
     api.spawnEnforcersAt(96, 90, 3);
-    api.setTime(18.6);
+    api.setTime(17.8);
     api.setMessage('MISSION 4 — THE DROP', 60);
     return 'play';
   }
